@@ -69,7 +69,9 @@ python -m benchmarks.duplex.fdb setup
 | `qwen` (default) | [Qwen3.8-27B](https://docs.sglang.io/cookbook/autoregressive/Qwen/Qwen3.8-27B), served locally: non-thinking, greedy, seeds 1-3 | Qwen3.8-27B: thinking, temperature 0, seed 1 | Qwen3.8-27B with the official prompt: non-thinking, seed 0 |
 | `gpt` | `gpt-4o-2024-08-06`, the paper's judge | not run | `gpt-4-turbo`, which the official evaluator requests |
 
-`JUDGE=gpt` needs `OPENAI_API_KEY`. With `JUDGE=qwen` the labels and ratings are not the paper's, but the judge is local and pinned, so runs stay comparable with each other. Before grading, the semantic judge sends six control cases (`benchmarks/duplex/semantic/`) and stops if any of their 18 axis statuses differs from `control-expected.json`; this checks the rubric, not the judge's accuracy.
+`JUDGE=gpt` needs `OPENAI_API_KEY`. With `JUDGE=qwen` the labels and ratings are not the paper's, but the judge is local and pinned, so runs with the same settings stay comparable with each other. The semantic judge sends six control cases (`benchmarks/duplex/semantic/`) together with its first grading batches and keeps the grades only if all 18 control axis statuses match `control-expected.json`; otherwise it discards them and stops. The controls check the rubric, not the judge's accuracy.
+
+A judge starts only when the step has a request for it: the v1.5 pairs and the v1.0 interruption subset need one, while the other v1.0 subsets are scored without an LLM. A run with only those subsets starts no judge server and needs no API key.
 
 ## Run the benchmark
 
@@ -79,7 +81,7 @@ A run has three steps, then an aggregation. Each step starts the server it needs
 |---|---|---|
 | 1 | `generate` | Starts the model server, streams the selected inputs to `/v1/realtime` (two sessions per v1.5 pair, one per v1.0 sample), records the model's audio, stops the server, then cuts a fixed observation window from each session |
 | 2 | `asr` | Transcribes the windows with word timestamps (Parakeet); for v1.5 also computes speech intervals with the official timing code |
-| 3 | `judge` | Starts the judge server, judges the v1.5 pairs, runs the official v1.0 evaluator on each v1.0 subset, stops the server, and writes the per-repeat summaries |
+| 3 | `judge` | Runs the official v1.0 evaluator on each v1.0 subset, starts the judge server when the v1.5 pairs or the v1.0 interruptions need it, judges them, stops the server, and writes the per-repeat summaries |
 | | `aggregate` | Combines the repeats of a run into `RESULTS.md` |
 
 Run a small preflight first. It takes one pair per v1.5 category and three samples per v1.0 subset (about 15 minutes) and catches environment problems before a long run. v1.0 needs three samples rather than one because the official turn-taking and interruption evaluators divide by the number of takeovers and fail when no selected sample takes the turn.
@@ -91,7 +93,7 @@ python -m benchmarks.duplex.fdb judge --run-name preflight
 python -m benchmarks.duplex.fdb aggregate --run-name preflight
 ```
 
-The preflight passes when `generate` prints `{"pass": 8}` and `{"eligible_pairs": 4, ...}` for v1.5 and `{"pass": 15}` with 3 eligible samples per v1.0 subset; `asr` prints `{"ok": 16}`, `{"ok": 8}` and 3 transcripts per v1.0 subset; and `judge` prints `{"valid": 4}`, `controls: 18/18 axis statuses match` and a `[Result]` block per v1.0 subset. If anything differs, see [Troubleshooting](#troubleshooting).
+The preflight passes when `generate` prints `{"pass": 8}` and `{"eligible_pairs": 4, ...}` for v1.5 and `{"pass": 15}` with 3 eligible samples per v1.0 subset; `asr` prints `{"ok": 16}`, `{"ok": 8}` and 3 transcripts per v1.0 subset; and `judge` prints `{"valid": 4}`, `controls: 18/18 axis statuses match` and the parsed v1.0 results of each subset as JSON (the evaluator's own `[Result]` block is in `repeat-N/v10/reference/logs/evaluate-<subset>.log`). If anything differs, see [Troubleshooting](#troubleshooting).
 
 A run is one fixed selection of samples under `$FDB_WORK/runs/RUN_NAME`. Decoding uses sampling, so two generations of the same inputs differ; to measure that variance, run the three steps several times under one run name with `--repeat 1`, `--repeat 2`, and so on. `--repeat N` only names the output directory `repeat-N/`; one command always runs once. `aggregate` reports the mean ± standard deviation over the finished repeats.
 
@@ -105,6 +107,8 @@ python -m benchmarks.duplex.fdb aggregate --run-name minicpmo-12
 ```
 
 `generate` refuses to write into a repeat that already holds a recording; to redo one, delete its `repeat-N/` directory and run its three steps again. `asr` and `judge` resume finished work when rerun.
+
+Every subcommand takes `--log-level` (`info` by default). With `--log-level debug`, a step also prints the server and recorder logs it writes, each line prefixed with the log's name, such as `[judge-server]` or `[record-shard-0]`. The logs are written to `repeat-N/logs/` at either level.
 
 ### Choosing samples
 
@@ -150,7 +154,7 @@ Sessions run in real time, so `generate` dominates the wall time. Approximate ti
 | 60 v1.0 samples (12 per subset) | ~20 min | ~1 min | ~1 min |
 | 727 v1.0 samples | ~3.6 h | ~10 min | ~5 min |
 
-A v1.5 session lasts about 15 s and a v1.0 sample about 18 s on average. Most of a v1.5 `judge` is the semantic judge, which runs 8 thinking-mode batches of up to 8 pairs concurrently at about 5 minutes per batch. `generate --num-shards 2` roughly halves the generation time, but read the note on it in [Notes](#notes) first.
+A v1.5 session lasts about 15 s and a v1.0 sample about 18 s on average. Most of a v1.5 `judge` is the semantic judge, which runs 8 thinking-mode batches of up to 8 pairs concurrently at about 5 minutes per batch; the behavior judge sends up to 16 requests at once. `generate --num-shards 2` roughly halves the generation time, but read the note on it in [Notes](#notes) first.
 
 ## Results
 
@@ -178,7 +182,7 @@ With `JUDGE=qwen` the v1.5 section adds the semantic table. From the same valida
 | talking_to_other | 50.0 ± 23.6% | 100.0 ± 0.0% | 75.0 ± 35.4% | 66.7 ± 0.0% | 58.3 ± 11.8% | 83.3 ± 23.6% | 16.7 ± 23.6% | 83.3 ± 23.6% |
 | background_speech | 83.3 ± 23.6% | 100.0 ± 0.0% | 100.0 ± 0.0% | 100.0 ± 0.0% | 16.7 ± 23.6% | 100.0 ± 0.0% | 16.7 ± 23.6% | 100.0 ± 0.0% |
 
-The v1.0 section has one row per selected subset. `Selected` counts the recorded samples, `Eligible` the ones the official evaluator can score, and `Evaluated` the ones it scored; then come `Takeover rate`, `Latency (s)`, `Relevance (0-5)`, `Judge retries`, `Backchannel frequency` and `Backchannel JSD`, with `n/a` where the subset's task does not report a number. A subset whose sessions all failed still has a row, with `Eligible 0`; a subset whose evaluation failed shows `Eligible` above `Evaluated`. A nonzero `Judge retries` means the interruption takeover rate is inflated (see [v1.0 scoring](#v10-scoring)).
+The v1.0 section has one row per selected subset. `Selected` counts the recorded samples, `Eligible` the ones the official evaluator can score, and `Evaluated` the ones it scored; then come `Takeover rate`, `Latency (s)`, `Relevance (0-5)`, `Judge retries`, `Backchannel frequency` and `Backchannel JSD`, with `n/a` where the subset's task does not report a number. A subset whose sessions all failed still has a row, with `Eligible 0`. A subset that is not evaluated shows `n/a` from `Evaluated` on and is listed under the table as not evaluated yet (`judge` has not run) or failed (with its evaluator log). A nonzero `Judge retries` means the interruption takeover rate is inflated (see [v1.0 scoring](#v10-scoring)).
 
 Each repeat writes these files under `$FDB_WORK/runs/RUN_NAME/repeat-N/`:
 
@@ -198,7 +202,7 @@ With `JUDGE=qwen`, the "Official behavior label distribution" section of `report
 
 ## Settings
 
-Per-run choices (`--run-name`, `--repeat`, sample selection, `--num-shards`) are command options; `--help` on any subcommand lists them. Machine settings are environment variables, read in `benchmarks/duplex/fdb/common.py`:
+Per-run choices (`--run-name`, `--repeat`, sample selection, `--num-shards`, `--log-level`) are command options; `--help` on any subcommand lists them. Machine settings are environment variables, read in `benchmarks/duplex/fdb/common.py`:
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -242,6 +246,8 @@ The ports, the judge config and the compile caches follow the GPU index: the mod
 | Symptom | Fix |
 |---|---|
 | `ERROR: the model server did not become ready` (or the judge server) | The message ends with the last lines of the server log; the full log is `repeat-N/logs/model-server.log` or `judge-server.log` |
+| `ERROR: the model server exited with code N during the recordings` | The model server died while recording; the message ends with the last lines of `repeat-N/logs/model-server.log`. Fix the cause, delete the repeat and generate it again |
+| `ERROR: the judge server exited with code N before ...` or `during ...` | The judge server died; the message names the phase and ends with the last lines of `repeat-N/logs/judge-server.log`. Fix the cause and rerun `judge` with `--retry-failed`. If the phase is the v1.5 semantic judge, delete `repeat-N/semantic-qwen` first, because the batches it could not grade are saved as unresolved and a rerun reuses them |
 | `ERROR: something already serves ...` | Another server holds the port, often left from an interrupted run or a second job on the same GPU. Stop it, or give this job another `CUDA_VISIBLE_DEVICES` |
 | `ERROR: .../repeat-N already holds a recording` | That repeat was generated before; use the next `--repeat`, or delete the directory to redo it |
 | `ERROR: ... selects different pairs` or `... selects different v1.0 samples` | An earlier repeat of this run used another selection; pass the same options, or use a new run name |
@@ -258,7 +264,7 @@ The ports, the judge config and the compile caches follow the GPU index: the mod
 | `WARNING: the v1.0 evaluation failed for ...` | The traceback is at the end of `repeat-N/v10/reference/logs/evaluate-<subset>.log`. A `ZeroDivisionError` in `candor_turn_taking` or `synthetic_user_interruption` means no selected sample took the turn, so select more samples in a new run. After fixing another cause, rerun `judge`; it evaluates the missing subsets again |
 | `judge request ... got no parsable rating in 3 attempts` | The v1.0 relevance judge answered without a rating; the ledger in `v10/reference/judge/` has each reply. The official parser needs `Analysis: <text>`, a line break, then `I would rate the AI's response as <digit>`. The attempts share a seed, so a local judge repeats the same reply and a rerun fails again |
 | `custom judge identity changed; use a new --out` | The judge config changed since this repeat was judged, for example after an SGLang upgrade. Delete `repeat-N/judge-qwen` and rerun `judge` |
-| `Control check failed: this judge configuration is not accepted.` | The judge missed a control case, listed in the output. Check that the judge server runs the pinned Qwen3.8-27B revision, and do not grade with this configuration |
+| `Control check failed: this judge configuration is not accepted.` | The judge missed a control case, listed in the output; nothing graded alongside the controls is kept. Check that the judge server runs the pinned Qwen3.8-27B revision, then rerun `judge` |
 | `... changed since this directory was created; use a new --out` | The semantic judge settings, prompt or inputs changed since this repeat was graded. Delete `repeat-N/semantic-qwen` and rerun `judge` |
 | `model_mismatch` with `JUDGE=gpt` | The endpoint answered with a model other than `gpt-4o-2024-08-06`; use an endpoint that serves exactly that model |
 | `No module named 'onnx'` (or `einops`) in `model-server.log`, or `ModuleNotFoundError` in `asr` | Rerun `setup` |
@@ -266,7 +272,7 @@ The ports, the judge config and the compile caches follow the GPU index: the mod
 
 ## Scoring CLI reference
 
-The runbook wraps three CLIs, which also score a recording by hand: `benchmarks.eval.benchmark_duplex_v15` records v1.5 sessions, `benchmarks.eval.benchmark_duplex_reference` scores them with the official v1.5 ASR, timing and behavior code, and `benchmarks.eval.benchmark_duplex_v10` records and scores v1.0 sessions. Run `eval "$(python -m benchmarks.duplex.fdb env)"` first to set the variables the commands below use. `record` needs the model server and `custom-judge` the judge server; `python -m benchmarks.duplex.fdb serve-model` and `serve-judge` start them in the foreground until Ctrl-C.
+The runbook wraps three CLIs, which also score a recording by hand: `benchmarks.eval.benchmark_duplex_v15` records v1.5 sessions, `benchmarks.eval.benchmark_duplex_reference` scores them with the official v1.5 ASR, timing and behavior code, and `benchmarks.eval.benchmark_duplex_v10` records and scores v1.0 sessions. Run `eval "$(python -m benchmarks.duplex.fdb env)"` first to set the variables the commands below use. Recording and export run in the sglang-omni venv (`python`); ASR, timing, judging and evaluation need the packages `setup` installs in the scoring venv, so those commands run with `"$SCORING_PYTHON"`. `record` needs the model server and `custom-judge` the judge server; `python -m benchmarks.duplex.fdb serve-model` and `serve-judge` start them in the foreground until Ctrl-C.
 
 ### Dependencies and source
 
@@ -298,15 +304,15 @@ Score:
 
 ```bash
 TREE=(--reference-source "$FDB_SOURCE" --tree "model=$OUT/reference-audio")
-python -m benchmarks.eval.benchmark_duplex_reference asr "${TREE[@]}" \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference asr "${TREE[@]}" \
     --out "$OUT/scores" --nemo "$PARAKEET_NEMO" --nemo-sha256 "$PARAKEET_SHA256" --device cuda
-python -m benchmarks.eval.benchmark_duplex_reference timing "${TREE[@]}" \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference timing "${TREE[@]}" \
     --out "$OUT/scores" --audio-loader soundfile
-python -m benchmarks.eval.benchmark_duplex_reference prepare-judge "${TREE[@]}" --out "$OUT/scores"
-python -m benchmarks.eval.benchmark_duplex_reference judge "${TREE[@]}" --out "$OUT/scores" \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference prepare-judge "${TREE[@]}" --out "$OUT/scores"
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference judge "${TREE[@]}" --out "$OUT/scores" \
     --judge gpt-4o-2024-08-06 --api-key-env OPENAI_API_KEY
-python -m benchmarks.eval.benchmark_duplex_reference summarize "${TREE[@]}" --out "$OUT/scores"
-python -m benchmarks.eval.benchmark_duplex_reference report --scores "$OUT/scores" --engine model
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference summarize "${TREE[@]}" --out "$OUT/scores"
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference report --scores "$OUT/scores" --engine model
 ```
 
 Run the phases in order on one output directory with the same `--tree`; repeat `--tree` to score several cohorts together. CUDA ASR needs exactly one visible GPU. A rerun resumes from the receipts; `--retry-failed` retries failed work units, and `--limit N` caps the units of one call. After changing the recording, the scoring configuration or the reference code, use a new output directory. A zero exit means the phase finished, not that every sample qualified.
@@ -318,10 +324,10 @@ The GPT judge reads its key from `OPENAI_API_KEY`, never from an argument or a m
 `custom-judge` sends the same prompt to a self-hosted model. Its labels never replace GPT-4o labels. It reads an existing scoring directory and writes to a separate new one:
 
 ```bash
-python -m benchmarks.eval.benchmark_duplex_reference custom-judge "${TREE[@]}" \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference custom-judge "${TREE[@]}" \
     --source-scores "$OUT/scores" --out "$OUT/judge-qwen" \
     --judge-config "$JUDGE_CONFIG" --base-url "$JUDGE_URL"
-python -m benchmarks.eval.benchmark_duplex_reference custom-summarize "${TREE[@]}" \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_reference custom-summarize "${TREE[@]}" \
     --source-scores "$OUT/scores" --out "$OUT/judge-qwen" \
     --judge-config "$JUDGE_CONFIG"
 ```
@@ -347,7 +353,7 @@ python -m benchmarks.eval.benchmark_duplex_reference custom-summarize "${TREE[@]
 }
 ```
 
-Both revisions must be full commit hashes. `temperature`, `top_p` and `max_tokens` are required; the other decoding fields and `enable_thinking` are sent only when present, so leave out any the endpoint does not support. The launch receipt records the server command, runtime version, checkpoint and tokenizer revisions and precision, and the client checks its hash, because the model name an endpoint returns does not prove which checkpoint it loaded. The endpoint key goes in `CUSTOM_JUDGE_API_KEY`, or a placeholder such as `EMPTY` without authentication. A rerun with the same config skips finished samples; a changed config or selection needs a new `--out`. `--retry-failed` retries transport and parsing failures only; wrong models, invalid labels and non-`stop` finishes stay invalid. The per-category Wilson 95% intervals describe dataset sampling, not judge agreement or generation variance.
+Both revisions must be full commit hashes. `temperature`, `top_p` and `max_tokens` are required; the other decoding fields and `enable_thinking` are sent only when present, so leave out any the endpoint does not support. The launch receipt records the server command, runtime version, checkpoint and tokenizer revisions and precision, and the client checks its hash, because the model name an endpoint returns does not prove which checkpoint it loaded. The endpoint key goes in `CUSTOM_JUDGE_API_KEY`, or a placeholder such as `EMPTY` without authentication. A rerun with the same config skips finished samples; a changed config or selection needs a new `--out`. `--concurrency` (default 16) caps the requests in flight and is recorded with the run. `--retry-failed` retries transport and parsing failures only; wrong models, invalid labels and non-`stop` finishes stay invalid. The per-category Wilson 95% intervals describe dataset sampling, not judge agreement or generation variance.
 
 ### v1.0 scoring
 
@@ -363,10 +369,10 @@ python -m benchmarks.eval.benchmark_duplex_v10 record \
     --output "$OUT/recording"
 python -m benchmarks.eval.benchmark_duplex_v10 reference-export \
     --run "$OUT/recording" --dataset-root "$FDB10_DATASET" --out "$OUT/reference"
-python -m benchmarks.eval.benchmark_duplex_v10 reference-asr \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_v10 reference-asr \
     --tree "$OUT/reference" --reference-source "$FDB_SOURCE" \
     --nemo "$PARAKEET_NEMO" --nemo-sha256 "$PARAKEET_SHA256" --device cuda
-python -m benchmarks.eval.benchmark_duplex_v10 reference-evaluate \
+"$SCORING_PYTHON" -m benchmarks.eval.benchmark_duplex_v10 reference-evaluate \
     --tree "$OUT/reference" --reference-source "$FDB_SOURCE"
 ```
 

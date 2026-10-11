@@ -142,6 +142,7 @@ class Settings:
             "FDB_SOURCE": str(self.fdb_source),
             "FDB_DATASET": str(self.dataset),
             "FDB10_DATASET": str(self.dataset_v10),
+            "SCORING_PYTHON": str(self.scoring_python),
             "PARAKEET_NEMO": str(self.parakeet_nemo),
             "PARAKEET_SHA256": PARAKEET_SHA256,
             "MODEL_ID": MODEL_ID,

@@ -27,6 +27,7 @@ from benchmarks.duplex.fdb.common import (
     v10_command,
 )
 from benchmarks.duplex.fdb.servers import RunningServer, judge_server
+from benchmarks.duplex.v10_dataset import SUBSET_TASKS as V10_SUBSET_TASKS
 from benchmarks.duplex.v10_dataset import SUBSETS as V10_SUBSETS
 
 UNAUTHENTICATED_API_KEY = "EMPTY"
@@ -312,16 +313,34 @@ def judge(settings: Settings, repeat: int, retry_failed: bool) -> None:
         f"{ENGINE_LABEL}={repeat_dir / 'reference-audio'}",
     ]
     retry_arguments = ["--retry-failed"] if retry_failed else []
-    judge_with = judge_with_qwen if settings.judge == "qwen" else judge_with_gpt
-    is_judge_ok, failed_v10 = judge_with(
+    # note (luojiaxuan): only the v1.0 interruption subset asks an LLM; the other
+    # v1.0 subsets are scored without a judge, before any judge is started.
+    judged_v10 = [
+        subset
+        for subset in v10_subsets
+        if V10_SUBSET_TASKS[subset] == "user_interruption"
+    ]
+    failed_v10 = evaluate_v10(
         settings,
-        repeat_dir,
-        tree_arguments,
-        retry_arguments,
-        has_v15,
         v10_tree,
-        v10_subsets,
+        [subset for subset in v10_subsets if subset not in judged_v10],
+        [],
+        server=None,
     )
+    if has_v15 or judged_v10:
+        judge_with = judge_with_qwen if settings.judge == "qwen" else judge_with_gpt
+        is_judge_ok, failed_judged = judge_with(
+            settings,
+            repeat_dir,
+            tree_arguments,
+            retry_arguments,
+            has_v15,
+            v10_tree,
+            judged_v10,
+        )
+        failed_v10 += failed_judged
+    else:
+        is_judge_ok = True
     is_report_ok = (
         write_report(settings, repeat_dir, tree_arguments) if has_v15 else True
     )

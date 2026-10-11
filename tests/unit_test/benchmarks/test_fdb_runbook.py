@@ -213,6 +213,11 @@ def test_leave_out_hint_names_an_option_change_the_parser_accepts() -> None:
     )
 
 
+def test_env_exports_the_scoring_interpreter(settings: Settings) -> None:
+    # note (luojiaxuan): the manual scoring commands run with this interpreter.
+    assert settings.shell_exports()["SCORING_PYTHON"] == str(settings.scoring_python)
+
+
 def test_session_timeouts_stay_within_the_recorder_ceiling(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -651,12 +656,15 @@ def test_judge_evaluates_every_pending_subset_and_names_the_failed_ones(
 def test_judge_hands_the_pending_subsets_to_the_judge_phase(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    repeat_dir = stage_scored_repeat(settings, V10_IDS)
+    repeat_dir = stage_scored_repeat(
+        settings, [*V10_IDS, "synthetic_user_interruption/1"]
+    )
     tree = repeat_dir / "v10" / "reference"
     (tree / "asr.json").write_text("{}")
     (tree / "summary.json").write_text(
         json.dumps({"subsets": {"synthetic_pause_handling": {}}})
     )
+    calls = stub_judge_phases(monkeypatch, failing_subset=None)
     handed = []
     monkeypatch.setattr(
         judge_module,
@@ -665,7 +673,10 @@ def test_judge_hands_the_pending_subsets_to_the_judge_phase(
     )
     monkeypatch.setattr(judge_module, "write_report", lambda *_: True)
     judge_module.judge(settings, 1, False)
-    assert handed == [(tree, ["icc_backchannel"])]
+    # note (luojiaxuan): the judge-free subset is scored before the judge phase,
+    # which gets only the interruption subset.
+    assert evaluated_subsets(calls) == ["icc_backchannel"]
+    assert handed == [(tree, ["synthetic_user_interruption"])]
 
 
 def test_judge_runs_no_v10_phase_for_a_v15_only_repeat(
@@ -693,9 +704,9 @@ def test_judge_runs_no_v10_phase_for_a_v15_only_repeat(
         ),
         (V10_IDS, "custom-summarize", "before the v1.5 semantic A/F/U judge"),
         (
-            V10_IDS,
-            "reference-evaluate",
-            "during the v1.0 evaluation of synthetic_pause_handling",
+            [*V10_IDS, "synthetic_user_interruption/1"],
+            "synthetic_user_interruption",
+            "during the v1.0 evaluation of synthetic_user_interruption",
         ),
     ],
 )
@@ -783,6 +794,53 @@ def test_asr_and_judge_run_only_the_v10_phases_for_a_v10_only_repeat(
     other = load_settings("other")
     with pytest.raises(SystemExit, match="generate --run-name other"):
         asr_module.asr(other, 1, False)
+
+
+@pytest.mark.parametrize("judge_name", ["qwen", "gpt"])
+def test_judge_starts_no_judge_when_no_llm_request_is_pending(
+    judge_name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JUDGE", judge_name)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("FDB_WORK", str(tmp_path / "fdb"))
+    for name in ("CUDA_VISIBLE_DEVICES", "GPU", "SERVER_PORT", "JUDGE_PORT"):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings("v10")
+    no_llm = [
+        "synthetic_pause_handling/1",
+        "candor_turn_taking/1",
+        "icc_backchannel/1",
+    ]
+    repeat_dir = stage_scored_repeat(settings, no_llm, v15_ids=[])
+    (repeat_dir / "v10" / "reference" / "asr.json").write_text("{}")
+    calls = stub_judge_phases(monkeypatch, failing_subset=None)
+    monkeypatch.setattr(
+        judge_module,
+        "judge_server",
+        lambda *_: pytest.fail("the judge server started with no LLM request"),
+    )
+    judge_module.judge(settings, 1, False)
+    assert evaluated_subsets(calls) == [
+        "synthetic_pause_handling",
+        "candor_turn_taking",
+        "icc_backchannel",
+    ]
+    assert all("--base-url" not in command for command in calls)
+
+    # note (luojiaxuan): the interruption subset asks the judge, so the judge is
+    # needed again: a server with qwen, a key with gpt.
+    interruption = stage_scored_repeat(
+        load_settings("v10-interruption"),
+        ["synthetic_user_interruption/1"],
+        v15_ids=[],
+    )
+    (interruption / "v10" / "reference" / "asr.json").write_text("{}")
+    if judge_name == "gpt":
+        with pytest.raises(SystemExit, match="OPENAI_API_KEY"):
+            judge_module.judge(load_settings("v10-interruption"), 1, False)
+    else:
+        with pytest.raises(pytest.fail.Exception, match="judge server started"):
+            judge_module.judge(load_settings("v10-interruption"), 1, False)
 
 
 def test_asr_and_judge_refuse_a_selected_v10_without_its_artifacts(
