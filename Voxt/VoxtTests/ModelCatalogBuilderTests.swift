@@ -141,15 +141,11 @@ final class ModelCatalogBuilderTests: XCTestCase {
         XCTAssertEqual(entry.engine, AppLocalization.localizedString("SGLang Omni"))
     }
 
-    func testNonOmniASRModelKeepsMLXAudioEngineBadge() throws {
-        let repo = "mlx-community/parakeet-tdt-0.6b-v3"
-        let builder = makeBuilder(
-            featureSettings: makeFeatureSettings(transcriptionASR: .mlx(repo))
+    func testNonOmniASRModelKeepsMLXAudioEngineBadge() {
+        XCTAssertEqual(
+            ModelCatalogEngineSupport.asrTitle(for: "mlx-community/Qwen3-ASR-0.6B-8bit"),
+            AppLocalization.localizedString("MLX Audio")
         )
-
-        let entry = try XCTUnwrap(builder.asrEntries().first(where: { $0.id == "mlx:\(repo)" }))
-
-        XCTAssertEqual(entry.engine, AppLocalization.localizedString("MLX Audio"))
     }
 
     func testParakeetV3DoesNotClaimUnsupportedChinesePrimaryLanguage() throws {

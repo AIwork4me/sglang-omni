@@ -161,6 +161,8 @@ if [[ -n "$NATIVE_RUNTIME_DIR" ]]; then
     whisper_server \
     cohere_transcribe_server \
     moss_transcribe_diarize_server \
+    nemotron_asr_server \
+    parakeet_server \
     libmlx.dylib \
     libjaccl.dylib \
     mlx.metallib; do

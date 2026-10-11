@@ -115,7 +115,7 @@ final class OmniASRRuntimeLaunchTests: XCTestCase {
         XCTAssertFalse(OmniASRBackend.usesOmniRuntime(for: "mlx-community/Qwen3-ASR-0.6B-4bit"))
         XCTAssertFalse(OmniASRBackend.usesOmniRuntime(for: "mlx-community/whisper-large-v3-turbo"))
 #endif
-        XCTAssertFalse(OmniASRBackend.usesOmniRuntime(for: "mlx-community/parakeet-tdt-0.6b-v3"))
+        XCTAssertFalse(OmniASRBackend.usesOmniRuntime(for: "mlx-community/Qwen3-ASR-0.6B-8bit"))
     }
 
     /// Every Qwen3-ASR checkpoint the native runtime is checked against runs on it;
