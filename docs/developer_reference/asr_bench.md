@@ -1,4 +1,4 @@
-# ASR hill climbing runbook
+# ASR benchmark runbook
 
 This page is for hill climbing ASR serving in SGLang-Omni. The goal is to make the measured metrics better without regressions. Audio goes in and text comes out. Correctness is WER (CER and cpCER for MOSS-Transcribe-Diarize). Performance is throughput, latency and RTF.
 

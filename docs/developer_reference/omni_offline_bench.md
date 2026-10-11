@@ -1,4 +1,4 @@
-# MiniCPM-o offline hill climbing runbook
+# MiniCPM-o offline benchmark runbook
 
 This page is for hill climbing MiniCPM-o 4.5 offline serving in SGLang-Omni. The goal is to change the runtime so the measured metrics get better, with no regression anywhere else. Full duplex serving is covered in [Full-Duplex-Bench v1.5 runbook](full_duplex_bench.md).
 

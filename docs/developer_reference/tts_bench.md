@@ -1,4 +1,4 @@
-# TTS hill climbing runbook
+# TTS benchmark runbook
 
 This page is for hill climbing TTS serving in SGLang-Omni: make the measured metrics better without regressions. Correctness is WER, from transcribing the speech with Qwen3-ASR-1.7B. Performance is throughput, latency and RTF. The code must stay general, but the only workload to protect is the four benchmark commands on this page.
 
@@ -58,7 +58,7 @@ Set these variables on the host. Replace the `CPUSET` value with the set you fou
 ```bash
 GPU=0
 CPUSET=2-15,114-127
-WORK=$HOME/tts_hill_climbing
+WORK=$HOME/tts_bench
 ```
 
 ### Step 2: start the container
@@ -67,7 +67,7 @@ The image is the TTS CI image. Everything under `/work` lives in `$WORK` on the 
 
 ```bash
 mkdir -p $WORK $HOME/.cache
-docker run -d --name tts-hill-climbing \
+docker run -d --name tts-bench \
     --gpus device=$GPU --cpuset-cpus $CPUSET \
     -v /dev/shm:/dev/shm \
     -v $WORK:/work \
@@ -75,7 +75,7 @@ docker run -d --name tts-hill-climbing \
     --entrypoint sleep \
     hongccc/sglang-omni@sha256:ebe4239e29a764ee3a2806385c061c5fd438a26f01458e503d3822dcba5790df \
     infinity
-docker exec -it tts-hill-climbing bash
+docker exec -it tts-bench bash
 ```
 
 Every later command runs inside the container. Open another shell with the last line.
@@ -545,7 +545,7 @@ To run CI locally, do it after Step 15 step 5 and before step 6, so `/work/cand`
 
 ```bash
 CI_CPUSET=2-29,114-141
-docker stop tts-hill-climbing
+docker stop tts-bench
 docker run -d --name tts-ci \
     --gpus '"device=0,1"' --cpuset-cpus $CI_CPUSET \
     -v /dev/shm:/dev/shm \
@@ -575,7 +575,7 @@ python -m pytest tests/test_model/test_tts_serving_ci.py -v -s -x
 
 The downloads are for the `moss` and `higgs` presets and stage 4. Keep the `export` lines separate, or `prepare_rust_router.sh` cannot read `OMNI_CI_HOME`. The router build needs network and lands in `/work/rust-router`, so later containers reuse it. Without `--tts-stage`, `test_tts_ci.py` runs stages 1 to 3 (non streaming, streaming, consistency). For the other presets, use `TTS_CI_MODEL=qwen3-tts`, `qwen3-tts-custom-voice`, `moss` or `higgs`. For the two Qwen3-TTS presets, CI also runs the latency stage, for example `TTS_CI_MODEL=qwen3-tts python -m pytest tests/test_model/test_tts_latency_ci.py -v -s -x`.
 
-When done, run `docker rm -f tts-ci` and `docker start tts-hill-climbing` on the host.
+When done, run `docker rm -f tts-ci` and `docker start tts-bench` on the host.
 
 Do not wrap local runs in `run_flaky_pytest.sh`. It runs up to three attempts, so a green result can hide a failure.
 
