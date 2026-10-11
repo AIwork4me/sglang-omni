@@ -183,7 +183,7 @@ echo -n 29e01c4e8d000f4bcd70751be16fa94bf3d85a18 > $H/models--FunAudioLLM--Fun-C
 echo -n 7278e1e70fe206f11671096ffdd38061171dd6e5 > $H/models--Qwen--Qwen3-ASR-1.7B/refs/main
 ```
 
-Check the pins. The loop prints each model's `refs/main` and the snapshot directories it has. The two must match. The last line must list `27f4c1adee83b5b29b7c4b375f6b976324bda308`.
+Check the pins. The loop prints each model's `refs/main` and the snapshot directories it has. The pinned revision must have a matching snapshot directory. Other cached snapshots may also be present. The last line must list `27f4c1adee83b5b29b7c4b375f6b976324bda308`.
 
 ```bash
 H=/root/.cache/huggingface/hub

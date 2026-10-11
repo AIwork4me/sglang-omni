@@ -107,14 +107,16 @@ python -c "import datasets; datasets.load_dataset('zhaochenyang20/AISHELL4', spl
 python -c "import datasets; datasets.load_dataset('zhaochenyang20/googletime', split='validation')"
 ```
 
-The client cannot pin these datasets. Record their revisions right after the download, while still online. Compare this file between machines or dates before comparing numbers:
+The client cannot pin these datasets. Record the loaded dataset fingerprints and the remote repository heads right after the download, while still online. The remote head alone does not identify the cached rows. Compare both values between machines or dates before comparing numbers:
 
 ```bash
 mkdir -p /work/results
 python - > /work/results/moss_dataset_revisions.txt <<'EOF'
 from huggingface_hub import HfApi
+from datasets import load_dataset
 for r in ("zhaochenyang20/movies800time", "zhaochenyang20/AISHELL4", "zhaochenyang20/googletime"):
-    print(r, HfApi().dataset_info(r).sha)
+    dataset = load_dataset(r, split="validation")
+    print(r, "remote_head=" + HfApi().dataset_info(r).sha, "loaded_fingerprint=" + dataset._fingerprint)
 EOF
 cat /work/results/moss_dataset_revisions.txt
 ```
@@ -223,7 +225,7 @@ timeout 600 bash -c 'until [ $(nvidia-smi --query-gpu=memory.used --format=csv,n
 
 The server arguments and request settings match the CI test (`tests/test_model/test_asr_ci_multi_speaker.py`). Like CI, one server serves all four datasets. The checks are the same as in Step 5. Each client line must also print `CLIENT_OK`. The client exits with code 0, and so prints `CLIENT_OK`, only when every request succeeded. Otherwise it prints an error or an `Evaluation failed` line.
 
-For `movies80times` CI sends no `max_new_tokens`, so the server picks a budget scaled to the audio length, and the request timeout is 300 s. The client CLI always sends `--max-new-tokens` (default 65536) and has no flag to send none. So the two `movies800times` lines below call the client with that default set to `None`. The `aishell4_long` and `googletime` lines use the CLI defaults (65536 tokens, 1800 s), as CI does.
+For `movies800times` CI sends no `max_new_tokens`, so the server picks a budget scaled to the audio length, and the request timeout is 300 s. The client CLI always sends `--max-new-tokens` (default 65536) and has no flag to send none. So the two `movies800times` lines below call the client with that default set to `None`. The `aishell4_long` and `googletime` lines use the CLI defaults (65536 tokens, 1800 s), as CI does.
 
 ```bash
 mkdir -p $OUT/moss_td
@@ -247,13 +249,13 @@ kill -- -$(cat $OUT/moss_td/server.pid)
 timeout 600 bash -c 'until [ $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits) -lt 1024 ]; do sleep 5; done' && echo GPU_FREE
 ```
 
-The `max_new_tokens` stored in each `transcribe_diarize_results.json` shows what was sent. It must be `null` for both `movies800times` directories.
+The `config.max_new_tokens` stored in each `transcribe_diarize_speed_results.json` shows what was sent. It must be `null` for both `movies800times` directories.
 
 Then go back to Step 4 with the next `RUN` (`warm`, `1`, `2`, `3`). To measure only one model, run Step 4 and only that model's block, the same way in every run.
 
 ## Step 7: Summarize
 
-Save this script once. For one result directory it reads every scored run (`run1`, `run2`, ..., never `runwarm`), checks coverage, and prints the mean, min and max of each metric:
+Save this script once. For one result directory it reads the three scored runs (`run1`, `run2` and `run3`, never `runwarm`), checks coverage, and prints the mean, min and max of each metric:
 
 ```bash
 cat > /work/results/summarize.py <<'EOF'
@@ -263,7 +265,9 @@ MOSS = ("cer", "cp_cer", "cer_valid_samples", "cp_cer_valid_samples", "speaker_t
 SPEED = ("throughput_qps", "latency_mean_s", "latency_p95_s", "rtf_mean")
 EXPECTED = {"asr_en.json": 1088, "asr_zh.json": 2020, "movies800times": 800,
             "movies800times_stream": 800, "aishell4_long": 20, "googletime": 25}
-runs = sorted(glob.glob(f"{sys.argv[1]}/run[0-9]*"))
+runs = [f"{sys.argv[1]}/run{i}" for i in (1, 2, 3)]
+expected_keys = {f"{model}/{name}" for model in ("qwen3", "whisper", "fun") for name in ("asr_en.json", "asr_zh.json")}
+expected_keys |= {f"moss_td/{name}" for name in EXPECTED if not name.endswith(".json")}
 rows = {}
 for run in runs:
     for path in glob.glob(f"{run}/*/asr_*.json"):
@@ -278,6 +282,8 @@ for run in runs:
         d = p["diarization_metrics"]
         rows.setdefault("moss_td/" + name, []).append((ok, {k: d.get(k) for k in MOSS} | {k: s.get(k) for k in SPEED}))
 print(f"scored runs: {[os.path.basename(r) for r in runs]}")
+print(f"missing workloads: {sorted(expected_keys - rows.keys())}")
+print(f"coverage complete: {rows.keys() == expected_keys and all(len(rs) == 3 and all(ok for ok, _ in rs) for rs in rows.values())}")
 for key, rs in sorted(rows.items()):
     print(f"{key}  runs={len(rs)} complete={len(rs) == len(runs) and all(ok for ok, _ in rs)}")
     for k in rs[0][1]:
@@ -290,7 +296,7 @@ EOF
 python /work/results/summarize.py /work/results/$NAME
 ```
 
-Report the mean with the min and max of the three scored runs.
+Report the mean with the min and max of the three scored runs. `coverage complete: True` requires all ten workloads in all three runs with the expected sample counts. If you intentionally measured one model, its workload lines should each show `runs=3 complete=True`, while coverage of the full suite remains incomplete. An incomplete workload can still print partial means, so report its missing coverage instead of presenting those means as three full runs.
 
 ## Where each metric lives
 
@@ -383,9 +389,9 @@ python -m pytest tests/test_model/test_asr_ci_multi_speaker.py -v -s -x
 
 ## Caveats
 
-- **Private datasets.** `movies800time`, `AISHELL4` and `googletime` are private and cannot be pinned by the client. Compare `moss_dataset_revisions.txt` before comparing MOSS-Transcribe-Diarize numbers from different machines or dates.
+- **Private datasets.** `movies800time`, `AISHELL4` and `googletime` are private and cannot be pinned by the client. Compare the loaded fingerprints and remote heads in `moss_dataset_revisions.txt` before comparing MOSS-Transcribe-Diarize numbers from different machines or dates.
 - **Known flaky stage.** On 2026-10-09, 5 sampled CI stage 1 jobs reached only 43.2 to 44.7 req/s on `movies800times` in their first pytest attempt. After the server restarted for the second attempt, they reached 57.0 to 59.1 req/s. The cause is not known. A compile or file cache on disk is the likely suspect. CI sets `TORCHINDUCTOR_CACHE_DIR` to `$OMNI_CI_HOME/.torchinductor`. Outside CI, SGLang-Omni uses `~/.cache/sglang-omni/torchinductor` unless `TORCHINDUCTOR_CACHE_DIR` is set, as Step 4 does.
-- **Token budget on movies800times.** Sending a fixed 65536 token budget instead of none lets a clip that loops run far past the duration scaled budget. That changes throughput and latency a lot. Check `max_new_tokens` in the results file before comparing with CI.
+- **Token budget on movies800times.** Sending a fixed 65536 token budget instead of none lets a clip that loops run far past the duration scaled budget. That changes throughput and latency a lot. Check `config.max_new_tokens` in `transcribe_diarize_speed_results.json` before comparing with CI.
 - **Warmup sees the scored audio.** `--warmup` sends the same audio as the timed pass. Any cache keyed on audio content, file path or sample ID would hit on every timed request and make throughput meaningless.
 - **Stage 2 is one model per CI run.** A CI run measures only the model it picked. Run all three blocks of Step 5 here to see all of them.
 

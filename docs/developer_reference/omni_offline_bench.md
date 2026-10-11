@@ -99,11 +99,12 @@ docker exec -it omni-bench bash
 
 ### Check out and build the venv
 
-Check out the commit to measure, then build the venv with the CI script. It ends with `Fresh environment ready`. The script deletes and rebuilds `OMNI_CI_HOME`.
+Set `COMMIT` to the commit to measure. The default below measures the fetched main branch. Build the venv with the CI script, which ends with `Fresh environment ready`. The script deletes and rebuilds `OMNI_CI_HOME`.
 
 ```bash
 git clone https://github.com/sgl-project/sglang-omni.git /sglang-omni
-git -C /sglang-omni checkout --detach <commit>
+export COMMIT=origin/main
+git -C /sglang-omni checkout --detach "$COMMIT"
 cd /sglang-omni && OMNI_CI_HOME=/root/omni_ci bash .github/scripts/prepare_omni_venv.sh omni
 ```
 
@@ -374,7 +375,7 @@ for k in runs[0]["metrics"]:
 PY
 ```
 
-- **Same session.** Measurements from different sessions, GPUs or containers are not comparable.
+- **Same session.** Keep the GPU, CPU allocation and container configuration fixed. Record any session or allocation boundary when comparing runs, because it can change measurement noise.
 - **Not comparable with CI gates.** CI runs these workloads on two GPUs behind a router with two workers, with compile off, on `seedtts-50` instead of the full set, and retries failed stages. The thresholds in `tests/test_model/omni_ci_config.py` do not apply to single GPU numbers.
 
 To find where the time goes, see the `model-profiling` skill in this repository.
@@ -435,7 +436,7 @@ The #2532 run used MPS. The commands on this page do not.
 
 - **The first start is slow.** A start with an empty compile cache takes much longer than a warm start. One run starts three servers.
 - **Video-AMME Talker is one batch.** Ten requests do not fill 16 slots, so its throughput is mostly the completion time of that one batch. Small changes in one request move it.
-- **seed-tts output length varies.** The client samples at temperature 0.7 without a seed, as CI does. One long output can move throughput at concurrency 16 a lot. Check `seedtts.completion_tokens_sum` before reading a throughput change. Pass `--seed 0` to the client to make output lengths repeat across runs. CI sends no seed, so such numbers are not comparable with CI.
+- **seed-tts output length varies.** The client samples at temperature 0.7 without a seed, as CI does. One long output can move throughput at concurrency 16 a lot. Check `seedtts.completion_tokens_sum` before reading a throughput change. Passing `--seed 0` controls sampling variation, but does not guarantee identical outputs under concurrent scheduling. Record the seed and output lengths. CI sends no seed, so that setting differs from CI.
 - **CI differs from these runs.** CI wraps each stage in `.github/scripts/run_flaky_pytest.sh`, which runs a failed stage up to 3 times. The local test block does not, so a stage that fails only sometimes shows up here. CI gives the GPU pair 28 logical CPUs. This page gives it 56. MiniCPM-o CI runs only when selected (`run-minicpmo` label or `/tag-and-rerun-ci minicpmo`).
 - **Stages may fail on main.** A stage can fail on main. Run it on an earlier commit to tell an existing failure from a new one.
 - **Some datasets are CI subsets.** `Video_AMME_ci`, `Video_MME_ci`, `seed-tts-eval-50-arrow`, `mmmu-ci-50` and `mmsu-ci-2000` are CI subsets hosted on Hugging Face. Their results are not full benchmark estimates.
