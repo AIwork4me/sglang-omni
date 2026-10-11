@@ -10,11 +10,6 @@ jobs:
   validate:
     runs-on: [self-hosted, h100]
     timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      max-parallel: 1
-      matrix:
-        version: [A, D]
     container:
       image: hongccc/sglang-omni@sha256:ebe4239e29a764ee3a2806385c061c5fd438a26f01458e503d3822dcba5790df
       options: >-
@@ -24,14 +19,14 @@ jobs:
         -v /data/cache/huggingface:/github/home/.cache/huggingface
         -v /data/cache/huggingface:/root/.cache/huggingface
     env:
-      OMNI_CI_HOME: /data/omni-ci/run-${{ github.run_id }}-${{ matrix.version }}
+      OMNI_CI_HOME: /data/omni-ci/run-${{ github.run_id }}
       OMNI_CI_MODEL: minicpmo
       PYTORCH_ALLOC_CONF: expandable_segments:True
       NCCL_NVLS_ENABLE: "0"
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ matrix.version == 'A' && '615ddc21cb1bcc4f0017fa4f27a654bcb5a1ae42' || github.sha }}
+          ref: 615ddc21cb1bcc4f0017fa4f27a654bcb5a1ae42
       - uses: ./.github/actions/omni-setup
         with:
           venv-name: omni
@@ -48,23 +43,38 @@ jobs:
           import json
           import os
           from pathlib import Path
-          from huggingface_hub import HfApi, snapshot_download
+          from huggingface_hub import snapshot_download
           model_path = snapshot_download("openbmb/MiniCPM-o-4_5", revision="503e754207c94da6bb26850b4469f367c9ea3582")
           with open(os.environ["GITHUB_ENV"], "a") as output:
               output.write(f"SGLANG_OMNI_TEST_MINICPMO_MODEL={model_path}\n")
           manifests = {}
-          for repo in ("zhaochenyang20/Video_AMME_ci", "zhaochenyang20/Video_MME_ci"):
-              revision = HfApi().dataset_info(repo).sha
+          revisions = {
+              "zhaochenyang20/Video_AMME_ci": "7a37507f1b53416b9cb6641378e5a098ea535ab8",
+              "zhaochenyang20/Video_MME_ci": "833bd815c628ff277911bea3b1563545b21d5e27",
+          }
+          for repo, revision in revisions.items():
               directory = Path(snapshot_download(repo, repo_type="dataset", revision=revision))
+              reference = directory.parent.parent / "refs/main"
+              reference.parent.mkdir(parents=True, exist_ok=True)
+              reference.write_text(revision)
               hashes = {str(path.relative_to(directory)): hashlib.sha256(path.read_bytes()).hexdigest() for path in directory.rglob("*") if path.is_file()}
               manifests[repo] = {"revision": revision, "hashes": hashes}
+          asr_revision = "7278e1e70fe206f11671096ffdd38061171dd6e5"
+          asr_directory = Path(snapshot_download("Qwen/Qwen3-ASR-1.7B", revision=asr_revision))
+          asr_reference = asr_directory.parent.parent / "refs/main"
+          asr_reference.parent.mkdir(parents=True, exist_ok=True)
+          asr_reference.write_text(asr_revision)
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write("HF_HUB_OFFLINE=1\n")
           Path("evidence/manifests.json").write_text(json.dumps({"model_revision": "503e754207c94da6bb26850b4469f367c9ea3582", "datasets": manifests}, indent=2))
+          Path("evidence/asr-revision.txt").write_text(asr_revision)
           PY
           python -m pip freeze > evidence/pip-freeze.txt
           nvidia-smi --query-gpu=uuid,name,driver_version --format=csv > evidence/gpus.csv
           git rev-parse HEAD > evidence/commit.txt
           printenv OMNI_CI_CPUSET > evidence/cpu-affinity.txt
-      - name: Run Original CI Tests
+      - name: Run Original A CI Tests
+        continue-on-error: true
         shell: bash
         run: |
           source omni/bin/activate
@@ -79,7 +89,60 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: pr2635-h100-${{ matrix.version }}
+          name: pr2635-h100-A
+          path: |
+            evidence/*.json
+            evidence/*.xml
+            evidence/*.log
+            evidence/*.txt
+            evidence/*.csv
+            evidence/pytest/**/videoamme_results.json
+            evidence/pytest/**/videomme_results.json
+            evidence/pytest/**/server.log
+          retention-days: 30
+      - uses: actions/checkout@v4
+        if: always()
+        with:
+          ref: ${{ github.sha }}
+      - uses: ./.github/actions/omni-setup
+        with:
+          venv-name: omni
+          install-deps: "true"
+      - name: Build D CI Router
+        run: bash .github/scripts/prepare_rust_router.sh build
+      - name: Record D Environment
+        shell: bash
+        run: |
+          source omni/bin/activate
+          mkdir -p evidence
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          from huggingface_hub import snapshot_download
+          model_path = snapshot_download("openbmb/MiniCPM-o-4_5", revision="503e754207c94da6bb26850b4469f367c9ea3582")
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"SGLANG_OMNI_TEST_MINICPMO_MODEL={model_path}\n")
+          PY
+          python -m pip freeze > evidence/pip-freeze.txt
+          nvidia-smi --query-gpu=uuid,name,driver_version --format=csv > evidence/gpus.csv
+          git rev-parse HEAD > evidence/commit.txt
+          printenv OMNI_CI_CPUSET > evidence/cpu-affinity.txt
+      - name: Run Original D CI Tests
+        shell: bash
+        run: |
+          source omni/bin/activate
+          export PYTHONPATH=$PWD
+          pytest tests/test_model/test_qwen3_omni_videoamme_ci.py \
+            tests/test_model/test_qwen3_omni_videoamme_talker_tp2_ci.py \
+            tests/test_model/test_qwen3_omni_videomme_talker_ci.py \
+            -v -s --basetemp="$PWD/evidence/pytest" \
+            --junitxml=evidence/junit.xml 2>&1 | tee evidence/pytest.log
+          exit "${PIPESTATUS[0]}"
+      - name: Upload D Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr2635-h100-D
           path: |
             evidence/*.json
             evidence/*.xml
