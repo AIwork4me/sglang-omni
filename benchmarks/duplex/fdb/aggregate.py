@@ -259,7 +259,7 @@ def render(run_root: Path, engine: str, judge: JudgeName) -> str:
             "## v1.5 semantic A/F/U judge",
             "",
             "quality = A/(A+F); coverage = (A+F)/N. "
-            "joint fails if any axis fails and accepts only if all three accept.",
+            + "joint fails if any axis fails and accepts only if all three accept.",
             "",
             *render_table(per_repeat_semantic, SEMANTIC_COLUMNS),
         ]
