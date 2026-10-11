@@ -43,6 +43,7 @@ jobs:
       - name: Build Existing CI Router
         run: bash .github/scripts/prepare_rust_router.sh build
       - name: Match A and D Video Dependencies
+        shell: bash
         run: |
           source omni/bin/activate
           python -m pip install decord==0.6.0 audioread==3.1.0
