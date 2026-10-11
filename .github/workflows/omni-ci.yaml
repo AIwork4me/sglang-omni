@@ -104,12 +104,12 @@ jobs:
         shell: bash
         run: |
           source omni/bin/activate
-          cp "$RUNNER_TEMP/pr2635_mme_focused_test.py" tests/test_model/test_pr2635_mme_focused.py
+          cp "$RUNNER_TEMP/pr2635_mme_focused_test.py" tests/test_model/test_pr2635_mme_talker_focused.py
           export PYTHONPATH=$PWD
           for history in cold pair; do
             for repetition in 1 2 3; do
               PR2635_HISTORY="$history" PR2635_OUTPUT="$PWD/evidence/focused/$history-$repetition" \
-                pytest tests/test_model/test_pr2635_mme_focused.py -v -s \
+                pytest tests/test_model/test_pr2635_mme_talker_focused.py -v -s \
                 --basetemp="$PWD/evidence/pytest-$history-$repetition" \
                 --junitxml="evidence/focused-$history-$repetition.xml" \
                 2>&1 | tee "evidence/focused-$history-$repetition.log"
@@ -177,12 +177,12 @@ jobs:
         shell: bash
         run: |
           source omni/bin/activate
-          cp "$RUNNER_TEMP/pr2635_mme_focused_test.py" tests/test_model/test_pr2635_mme_focused.py
+          cp "$RUNNER_TEMP/pr2635_mme_focused_test.py" tests/test_model/test_pr2635_mme_talker_focused.py
           export PYTHONPATH=$PWD
           for history in cold pair; do
             for repetition in 1 2 3; do
               PR2635_HISTORY="$history" PR2635_OUTPUT="$PWD/evidence/focused/$history-$repetition" \
-                pytest tests/test_model/test_pr2635_mme_focused.py -v -s \
+                pytest tests/test_model/test_pr2635_mme_talker_focused.py -v -s \
                 --basetemp="$PWD/evidence/pytest-$history-$repetition" \
                 --junitxml="evidence/focused-$history-$repetition.xml" \
                 2>&1 | tee "evidence/focused-$history-$repetition.log"

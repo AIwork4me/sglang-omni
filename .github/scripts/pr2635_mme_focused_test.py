@@ -12,7 +12,9 @@ from tests.test_model.test_qwen3_omni_videomme_talker_ci import (
     load_short_answer_samples,
 )
 
-OMNI_CI_QWEN_FIXTURES["test_pr2635_mme_focused"] = "qwen3_omni_bf16_disagg_server"
+OMNI_CI_QWEN_FIXTURES["test_pr2635_mme_talker_focused"] = (
+    "qwen3_omni_bf16_disagg_server"
+)
 
 
 def test_mme_talker_focused(
