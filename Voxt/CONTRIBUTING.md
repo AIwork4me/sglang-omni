@@ -65,11 +65,10 @@ xcodebuild test \
 ## Local packages and reserved CI release automation
 
 The repository currently does not depend on CI to create installable packages.
-The root `Voxt Mac CI` workflow is reserved and disabled by default because
-the Omni repository still needs its Apple Silicon runner and persistent CI
-storage configured. Enable the workflow only when the repository variable
-`VOXT_ENABLE_MAC_CI=true` is configured. Its package job additionally requires
-`VOXT_ENABLE_CI_PACKAGE=true`.
+The root `Voxt Mac CI` workflow runs the native runtime's golden and API tests
+and Voxt's Omni unit tests on the Apple Silicon runner for pull requests with
+the `run-ci` label. Its package job runs only when the repository variable
+`VOXT_ENABLE_CI_PACKAGE=true` is configured.
 
 For local development, build the Native Omni runtime and package the app with:
 
