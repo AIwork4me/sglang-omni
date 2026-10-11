@@ -7,12 +7,19 @@ docs/developer_reference/full_duplex_bench.md.
 
 from __future__ import annotations
 
+import codecs
+import io
 import json
+import logging
 import os
 import subprocess
+import sys
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import BinaryIO, Literal
 
 from pydantic import JsonValue
 
@@ -290,10 +297,61 @@ def load_settings(run_name: str) -> Settings:
 
 
 LOG_TAIL_LINES = 20
+FOLLOW_INTERVAL_S = 0.5
+LOGGER = logging.getLogger("benchmarks.duplex.fdb")
+
+
+def configure_logging(level: str) -> None:
+    """Print the runbook's messages as they are; at debug, also the followed logs.
+    Other loggers in this process keep their own setup."""
+    LOGGER.addHandler(logging.StreamHandler(sys.stdout))
+    LOGGER.setLevel(level.upper())
 
 
 def log(message: str) -> None:
-    print(message, flush=True)
+    LOGGER.info(message)
+
+
+def echo_appended_lines(handle: BinaryIO, prefix: str, stop: threading.Event) -> None:
+    """Emit the lines appended to handle at DEBUG every FOLLOW_INTERVAL_S; once
+    stop is set, read to the end and emit the rest, an unterminated line too.
+    The bytes are decoded as UTF-8 with universal newlines; a character or a
+    CRLF that a read splits is held until the rest of its bytes arrive."""
+    decoder = io.IncrementalNewlineDecoder(
+        codecs.getincrementaldecoder("utf-8")(errors="replace"), translate=True
+    )
+    partial = ""
+    is_stopping = False
+    while not is_stopping:
+        is_stopping = stop.wait(FOLLOW_INTERVAL_S)
+        appended = decoder.decode(handle.read(), final=is_stopping)
+        *lines, partial = (partial + appended).split("\n")
+        for line in lines:
+            LOGGER.debug(f"{prefix} {line}")
+    if partial:
+        LOGGER.debug(f"{prefix} {partial}")
+    else:
+        pass
+
+
+@contextmanager
+def follow_log(path: Path) -> Iterator[None]:
+    """At DEBUG, stream path from its first byte, prefixed with [its stem], while
+    the block runs. The file must exist and only grow while it is followed."""
+    if LOGGER.isEnabledFor(logging.DEBUG):
+        stop = threading.Event()
+        with path.open("rb") as handle:
+            follower = threading.Thread(
+                target=echo_appended_lines, args=(handle, f"[{path.stem}]", stop)
+            )
+            follower.start()
+            try:
+                yield
+            finally:
+                stop.set()
+                follower.join()
+    else:
+        yield
 
 
 def step_command(step: str, settings: Settings, repeat: int | None = None) -> str:

@@ -26,7 +26,7 @@ from benchmarks.duplex.fdb.common import (
     step_command,
     v10_command,
 )
-from benchmarks.duplex.fdb.servers import judge_server
+from benchmarks.duplex.fdb.servers import RunningServer, judge_server
 from benchmarks.duplex.v10_dataset import SUBSETS as V10_SUBSETS
 
 UNAUTHENTICATED_API_KEY = "EMPTY"
@@ -44,31 +44,53 @@ def pending_v10_subsets(tree: Path) -> list[str]:
     ]
 
 
+def run_judge_phase(
+    server: RunningServer,
+    what: str,
+    command: list[str],
+    extra_env: dict[str, str] | None,
+) -> bool:
+    """Run a phase that calls the judge server; True when it exits 0. A server
+    that exited before or during the phase stops the step whatever the phase's
+    exit code, since the semantic judge records a refused request as unresolved
+    and exits 0."""
+    server.ensure_alive(f"before {what}")
+    is_ok = run_command(command, extra_env=extra_env)
+    server.ensure_alive(f"during {what}")
+    return is_ok
+
+
 def evaluate_v10(
     settings: Settings,
     tree: Path,
     subsets: list[str],
     judge_arguments: list[str],
+    server: RunningServer | None,
     extra_env: dict[str, str] | None = None,
 ) -> list[str]:
     """Run the pinned evaluator on each pending subset in its own call, so one
-    failing subset does not hold back the others; returns the subsets that failed."""
+    failing subset does not hold back the others; returns the subsets that failed.
+    server is the local judge server, None for a hosted judge."""
     failed = []
     for subset in subsets:
         log(f"== v1.0 reference evaluation of {subset} -> {tree}")
-        is_ok = run_command(
-            v10_command(
-                settings,
-                "reference-evaluate",
-                "--tree",
-                str(tree),
-                "--reference-source",
-                str(settings.fdb_source),
-                "--subset",
-                subset,
-                *judge_arguments,
-            ),
-            extra_env=extra_env,
+        command = v10_command(
+            settings,
+            "reference-evaluate",
+            "--tree",
+            str(tree),
+            "--reference-source",
+            str(settings.fdb_source),
+            "--subset",
+            subset,
+            *judge_arguments,
+        )
+        is_ok = (
+            run_command(command, extra_env=extra_env)
+            if server is None
+            else run_judge_phase(
+                server, f"the v1.0 evaluation of {subset}", command, extra_env
+            )
         )
         if not is_ok:
             failed.append(subset)
@@ -102,10 +124,12 @@ def judge_with_qwen(
         str(qwen_scores),
     ]
     is_v15_ok = True
-    with judge_server(settings, repeat_dir / "logs" / "judge-server.log"):
+    with judge_server(settings, repeat_dir / "logs" / "judge-server.log") as server:
         if has_v15:
             log(f"== v1.5 Qwen judge -> {qwen_scores}")
-            is_judge_ok = run_command(
+            is_judge_ok = run_judge_phase(
+                server,
+                "the v1.5 Qwen judge",
                 reference_command(
                     settings,
                     "custom-judge",
@@ -116,7 +140,7 @@ def judge_with_qwen(
                     settings.judge_url,
                     *retry_arguments,
                 ),
-                extra_env=api_key_env,
+                api_key_env,
             )
             is_summary_ok = run_command(
                 reference_command(
@@ -128,7 +152,9 @@ def judge_with_qwen(
                 )
             )
             log(f"== v1.5 semantic A/F/U judge -> {semantic_scores}")
-            is_semantic_ok = run_command(
+            is_semantic_ok = run_judge_phase(
+                server,
+                "the v1.5 semantic A/F/U judge",
                 [
                     str(settings.scoring_python),
                     "-m",
@@ -152,7 +178,7 @@ def judge_with_qwen(
                     "--served-model",
                     JUDGE_SERVED_MODEL,
                 ],
-                extra_env=api_key_env,
+                api_key_env,
             )
             is_v15_ok = is_judge_ok and is_summary_ok and is_semantic_ok
         else:
@@ -169,6 +195,7 @@ def judge_with_qwen(
                 "--served-model",
                 JUDGE_SERVED_MODEL,
             ],
+            server,
             extra_env=api_key_env,
         )
     return is_v15_ok, failed_v10
@@ -213,7 +240,11 @@ def judge_with_gpt(
     else:
         pass
     failed_v10 = evaluate_v10(
-        settings, v10_tree, v10_subsets, ["--api-key-env", "OPENAI_API_KEY"]
+        settings,
+        v10_tree,
+        v10_subsets,
+        ["--api-key-env", "OPENAI_API_KEY"],
+        server=None,
     )
     return is_v15_ok, failed_v10
 

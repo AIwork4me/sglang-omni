@@ -23,7 +23,7 @@ from types import FrameType
 
 from benchmarks.duplex.fdb.aggregate import aggregate
 from benchmarks.duplex.fdb.asr import asr
-from benchmarks.duplex.fdb.common import load_settings, log
+from benchmarks.duplex.fdb.common import configure_logging, load_settings, log
 from benchmarks.duplex.fdb.generate import generate
 from benchmarks.duplex.fdb.judge import judge
 from benchmarks.duplex.fdb.selection import (
@@ -94,7 +94,15 @@ def build_parser() -> argparse.ArgumentParser:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.set_defaults(run_name=DEFAULT_RUN_NAME)
-    run_options = argparse.ArgumentParser(add_help=False)
+    log_options = argparse.ArgumentParser(add_help=False)
+    log_options.add_argument(
+        "--log-level",
+        choices=("debug", "info"),
+        default="info",
+        help="debug also streams the server and recorder logs this step writes "
+        "(default: %(default)s)",
+    )
+    run_options = argparse.ArgumentParser(add_help=False, parents=[log_options])
     run_options.add_argument(
         "--run-name",
         default=DEFAULT_RUN_NAME,
@@ -109,7 +117,11 @@ def build_parser() -> argparse.ArgumentParser:
         "(default: %(default)s)",
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("setup", help="Download and pin every input; safe to rerun")
+    commands.add_parser(
+        "setup",
+        parents=[log_options],
+        help="Download and pin every input; safe to rerun",
+    )
     generate_parser = commands.add_parser(
         "generate",
         parents=[repeat_options],
@@ -137,10 +149,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Combine finished repeats into RESULTS.md",
     )
     commands.add_parser(
-        "serve-model", help="Serve the model under test in the foreground"
+        "serve-model",
+        parents=[log_options],
+        help="Serve the model under test in the foreground",
     )
-    commands.add_parser("serve-judge", help="Serve the Qwen judge in the foreground")
-    commands.add_parser("env", help="Print shell exports for the manual CLI commands")
+    commands.add_parser(
+        "serve-judge",
+        parents=[log_options],
+        help="Serve the Qwen judge in the foreground",
+    )
+    commands.add_parser(
+        "env",
+        parents=[log_options],
+        help="Print shell exports for the manual CLI commands",
+    )
     return parser
 
 
@@ -183,6 +205,7 @@ def exit_on_sigterm(signal_number: int, frame: FrameType | None) -> None:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    configure_logging(args.log_level)
     signal.signal(signal.SIGTERM, exit_on_sigterm)
     settings = load_settings(args.run_name)
     settings.apply_job_isolation()

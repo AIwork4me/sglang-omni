@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import json
 import shutil
+import subprocess
 import sys
 import types
 from collections.abc import Iterator
@@ -35,6 +36,7 @@ from benchmarks.duplex.fdb.selection import (
     leave_out_hint,
     select_v10_samples,
 )
+from benchmarks.duplex.fdb.servers import RunningServer
 from benchmarks.duplex.v10_dataset import SUBSETS as V10_SUBSETS
 from benchmarks.duplex.v15_dataset import SUBSETS as V15_SUBSETS
 from benchmarks.eval import benchmark_duplex_v10
@@ -46,6 +48,8 @@ C_LABELS = ("C_RESPOND", "C_RESUME", "C_UNCERTAIN_HANDLING", "C_UNKNOWN")
 V10_REVISION = "sha256:fixture"
 COUNT_HINT = "pass --v10-per-subset 0"
 V10_CLI = "benchmarks.eval.benchmark_duplex_v10"
+LIVE_SERVER = types.SimpleNamespace(ensure_alive=lambda when: None)
+SERVER_LAST_WORDS = "Scheduler hit an exception"
 
 
 def write_v10_dataset(root: Path) -> Path:
@@ -268,8 +272,8 @@ def stage_datasets(settings: Settings) -> None:
 
 
 @contextlib.contextmanager
-def no_server(settings: Settings, log_file: Path) -> Iterator[None]:
-    yield
+def no_server(settings: Settings, log_file: Path) -> Iterator[types.SimpleNamespace]:
+    yield LIVE_SERVER
 
 
 def stub_generate_phases(
@@ -425,6 +429,38 @@ def test_generate_discards_the_v10_marker_of_an_attempt_that_never_recorded(
     )
 
 
+def test_generate_stops_with_the_server_log_when_the_model_server_exited(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    stage_datasets(settings)
+    _, recordings, exports = stub_generate_phases(monkeypatch)
+
+    @contextlib.contextmanager
+    def model_server(settings: Settings, log_file: Path) -> Iterator[RunningServer]:
+        with log_file.open("w") as log_handle:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    f"print({SERVER_LAST_WORDS!r}); raise SystemExit(3)",
+                ],
+                stdout=log_handle,
+            )
+        process.wait()
+        yield RunningServer("model server", process, log_file)
+
+    monkeypatch.setattr(generate_module, "model_server", model_server)
+    with pytest.raises(
+        SystemExit,
+        match=f"model server exited with code 3 during the recordings; "
+        f"last lines of .*model-server.log:\n{SERVER_LAST_WORDS}",
+    ):
+        generate_module.generate(
+            settings, 1, SampleSelection(per_subset=1), SampleSelection(per_subset=1), 1
+        )
+    assert len(recordings) == 2 and exports == []
+
+
 def run_v10_cli(argv: list[str], handler: str, monkeypatch: pytest.MonkeyPatch):
     """Parse a composed v1.0 command with the real CLI; the handler only captures."""
     captured = []
@@ -573,7 +609,7 @@ def stub_judge_phases(
     """Replace the judge server, the scoring subprocesses and the report writer."""
     calls = []
     monkeypatch.setattr(
-        judge_module, "judge_server", lambda *_: contextlib.nullcontext()
+        judge_module, "judge_server", lambda *_: contextlib.nullcontext(LIVE_SERVER)
     )
 
     def run(command: list[str], **_: object) -> bool:
@@ -642,6 +678,90 @@ def test_judge_runs_no_v10_phase_for_a_v15_only_repeat(
     assert not any(V10_CLI in command for command in calls)
 
 
+@pytest.mark.parametrize(
+    ("v10_ids", "exits_during", "stopped_at"),
+    [
+        (
+            V10_IDS,
+            "benchmarks.duplex.semantic_judge",
+            "during the v1.5 semantic A/F/U judge",
+        ),
+        (
+            None,
+            "benchmarks.duplex.semantic_judge",
+            "during the v1.5 semantic A/F/U judge",
+        ),
+        (V10_IDS, "custom-summarize", "before the v1.5 semantic A/F/U judge"),
+        (
+            V10_IDS,
+            "reference-evaluate",
+            "during the v1.0 evaluation of synthetic_pause_handling",
+        ),
+    ],
+)
+def test_judge_stops_with_the_server_log_once_the_judge_server_exits(
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    v10_ids: list[str] | None,
+    exits_during: str,
+    stopped_at: str,
+) -> None:
+    repeat_dir = stage_scored_repeat(settings, v10_ids)
+    if v10_ids is not None:
+        (repeat_dir / "v10" / "reference" / "asr.json").write_text("{}")
+    else:
+        pass
+    stub_judge_phases(monkeypatch, failing_subset=None)
+    processes = []
+
+    @contextlib.contextmanager
+    def judge_server(settings: Settings, log_file: Path) -> Iterator[RunningServer]:
+        # note (luojiaxuan): a real process stands in for the server; closing
+        # its stdin makes it log a last line and exit with code 1.
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        with log_file.open("w") as log_handle:
+            process = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    f"import sys; sys.stdin.read(); print({SERVER_LAST_WORDS!r}); "
+                    "sys.exit(1)",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=log_handle,
+            )
+        processes.append(process)
+        try:
+            yield RunningServer("judge server", process, log_file)
+        finally:
+            process.stdin.close()
+            process.wait()
+
+    calls = []
+
+    def run(command: list[str], **_: object) -> bool:
+        calls.append(command)
+        if exits_during in command:
+            processes[0].stdin.close()
+            processes[0].wait()
+        else:
+            pass
+        # note (luojiaxuan): against an exited server the v1.0 evaluation fails,
+        # and the semantic judge exits 0 with its requests unresolved.
+        return "reference-evaluate" not in command
+
+    monkeypatch.setattr(judge_module, "judge_server", judge_server)
+    monkeypatch.setattr(judge_module, "run_command", run)
+    with pytest.raises(SystemExit) as stopped:
+        judge_module.judge(settings, 1, False)
+    log_file = repeat_dir / "logs" / "judge-server.log"
+    assert str(stopped.value) == (
+        f"ERROR: the judge server exited with code 1 {stopped_at}; "
+        f"last lines of {log_file}:\n{SERVER_LAST_WORDS}"
+    )
+    assert exits_during in calls[-1]
+
+
 def test_asr_and_judge_run_only_the_v10_phases_for_a_v10_only_repeat(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -705,6 +825,7 @@ def test_evaluate_v10_runs_each_subset_on_its_own_and_reports_failures(
         tree,
         ["candor_turn_taking", "synthetic_user_interruption", "icc_backchannel"],
         judge_arguments,
+        LIVE_SERVER,
         {"CUSTOM_JUDGE_API_KEY": "EMPTY"},
     )
     assert failed == ["candor_turn_taking"]
@@ -721,7 +842,7 @@ def test_evaluate_v10_runs_each_subset_on_its_own_and_reports_failures(
         settings.judge_url,
         "qwen3.8-27b",
     )
-    assert judge_module.evaluate_v10(settings, tree, [], judge_arguments) == []
+    assert judge_module.evaluate_v10(settings, tree, [], judge_arguments, None) == []
     assert len(calls) == 3
 
 

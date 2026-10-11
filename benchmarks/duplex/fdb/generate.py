@@ -19,6 +19,7 @@ from benchmarks.duplex.fdb.common import (
     REPO_ROOT,
     V10_DIR,
     Settings,
+    follow_log,
     log,
     log_tail,
     run_command,
@@ -115,9 +116,9 @@ def record_shards(
     with ExitStack() as stack:
         processes = []
         for shard_dir, shard_ids in shards:
-            shard_log = stack.enter_context(
-                (root / "logs" / f"record-{shard_dir.name}.log").open("w")
-            )
+            shard_log_path = root / "logs" / f"record-{shard_dir.name}.log"
+            shard_log = stack.enter_context(shard_log_path.open("w"))
+            stack.enter_context(follow_log(shard_log_path))
             sample_arguments = [
                 argument
                 for sample_id in shard_ids
@@ -267,7 +268,7 @@ def generate(
         )
     else:
         pass
-    with model_server(settings, repeat_dir / "logs" / "model-server.log"):
+    with model_server(settings, repeat_dir / "logs" / "model-server.log") as server:
         shard_dirs = []
         if sample_ids:
             (repeat_dir / "recording").mkdir()
@@ -291,6 +292,7 @@ def generate(
             )
         else:
             pass
+        server.ensure_alive("during the recordings")
     for shard_dir in shard_dirs:
         print_variant_status(repeat_dir, shard_dir)
     if shard_dirs:
