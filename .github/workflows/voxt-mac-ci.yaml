@@ -337,6 +337,7 @@ jobs:
             moss_transcribe_diarize_server \
             nemotron_asr_server \
             parakeet_server \
+            sensevoice_server \
             libmlx.dylib \
             libjaccl.dylib \
             mlx.metallib; do

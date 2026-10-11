@@ -163,6 +163,7 @@ if [[ -n "$NATIVE_RUNTIME_DIR" ]]; then
     moss_transcribe_diarize_server \
     nemotron_asr_server \
     parakeet_server \
+    sensevoice_server \
     libmlx.dylib \
     libjaccl.dylib \
     mlx.metallib; do
@@ -242,6 +243,7 @@ xcodebuild \
   -configuration "$CONFIGURATION" \
   -destination "$DESTINATION" \
   -derivedDataPath "$DERIVED_DATA" \
+  -skipPackagePluginValidation \
   "${BUILD_ACTIONS[@]}" \
   "${BUILD_OVERRIDES[@]}"
 
