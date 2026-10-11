@@ -125,7 +125,7 @@ def semantic_metrics(repeat_dir: Path) -> RepeatMetrics:
 def v10_metrics(repeat_dir: Path) -> RepeatMetrics:
     """One row per selected v1.0 subset from the export manifest; summary.json
     overlays the evaluated count and metrics, so a subset whose sessions all
-    failed, or whose evaluation did, keeps its row with n/a cells."""
+    failed, or that is not evaluated, keeps its row with n/a cells."""
     tree = repeat_dir / V10_DIR / "reference"
     if not (tree / "manifest.json").is_file():
         return {}
@@ -142,7 +142,8 @@ def v10_metrics(repeat_dir: Path) -> RepeatMetrics:
         row = {key: None for key, _, _ in V10_COLUMNS}
         row["selected"] = counts["selected"]
         row["eligible"] = counts["eligible"]
-        row["evaluated"] = 0
+        # note (luojiaxuan): with no eligible sample there is nothing to evaluate.
+        row["evaluated"] = 0 if counts["eligible"] == 0 else None
         if subset in evaluated:
             entry = evaluated[subset]
             row["evaluated"] = entry["evaluated"]
@@ -156,6 +157,33 @@ def v10_metrics(repeat_dir: Path) -> RepeatMetrics:
             pass
         metrics[subset] = row
     return metrics
+
+
+def v10_unevaluated(repeat_dir: Path) -> list[str]:
+    """The eligible v1.0 subsets summary.json lacks, as pending or failed. The
+    evaluator writes logs/evaluate-<subset>.log as it starts, so a subset with
+    that log and no result failed, and one without it has not run yet."""
+    tree = repeat_dir / V10_DIR / "reference"
+    if not (tree / "manifest.json").is_file():
+        return []
+    else:
+        pass
+    summary_path = tree / "summary.json"
+    evaluated = read_json(summary_path)["subsets"] if summary_path.is_file() else {}
+    notes = []
+    for subset, counts in read_json(tree / "manifest.json")["counts"].items():
+        if counts["eligible"] == 0 or subset in evaluated:
+            continue
+        elif (tree / "logs" / f"evaluate-{subset}.log").is_file():
+            notes.append(
+                f"- {repeat_dir.name} `{subset}`: evaluation failed; see "
+                f"`{V10_DIR}/reference/logs/evaluate-{subset}.log`"
+            )
+        else:
+            notes.append(
+                f"- {repeat_dir.name} `{subset}`: not evaluated yet; run `judge`"
+            )
+    return notes
 
 
 def render_table(
@@ -276,8 +304,8 @@ def render(run_root: Path, engine: str, judge: JudgeName) -> str:
             "",
             "Pinned reference evaluation per subset; subsets are never pooled. "
             "Selected counts the recorded samples, Eligible the exports the "
-            "evaluator can score, Evaluated the ones it scored; n/a metrics with "
-            "Eligible above Evaluated mean the evaluation failed. Takeover rate "
+            "evaluator can score, Evaluated the ones it scored; a subset that is "
+            "not evaluated shows n/a and is listed under the table. Takeover rate "
             "should be low on pause handling and backchannel, and high on turn "
             "taking and interruption. Relevance is a 0-5 rating of the "
             f"interruptions the model took over, by {relevance_judge}; a nonzero "
@@ -286,6 +314,11 @@ def render(run_root: Path, engine: str, judge: JudgeName) -> str:
             "",
             *render_table(per_repeat_v10, V10_COLUMNS, V10_SUBSETS),
         ]
+        unevaluated = [note for path in repeat_dirs for note in v10_unevaluated(path)]
+        if unevaluated:
+            lines += ["", "Not evaluated:", "", *unevaluated]
+        else:
+            pass
     else:
         pass
     return "\n".join(lines) + "\n"

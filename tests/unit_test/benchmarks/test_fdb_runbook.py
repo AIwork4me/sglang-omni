@@ -871,6 +871,34 @@ def test_results_append_a_separate_v10_table_only_when_a_run_has_v10(
     )
 
 
+def test_results_list_unevaluated_v10_subsets_as_pending_or_failed(
+    tmp_path: Path,
+) -> None:
+    run_root = tmp_path / "run"
+    repeat_dir = run_root / "repeat-1"
+    write_v15_scores(repeat_dir, 1.0)
+    write_v10_tree(repeat_dir, takeover=1.0, latency_s=2.0, retries=0)
+    tree = repeat_dir / "v10" / "reference"
+    summary = json.loads((tree / "summary.json").read_text())
+    for subset in ("candor_turn_taking", "icc_backchannel"):
+        del summary["subsets"][subset]
+    (tree / "summary.json").write_text(json.dumps(summary))
+    (tree / "logs").mkdir(exist_ok=True)
+    (tree / "logs" / "evaluate-icc_backchannel.log").write_text("Traceback\n")
+    lines = render(run_root, "minicpmo", "qwen").splitlines()
+    assert (
+        "| candor_turn_taking | 3 | 3 | n/a | n/a | n/a | n/a | n/a | n/a | n/a |"
+        in lines
+    )
+    assert "- repeat-1 `candor_turn_taking`: not evaluated yet; run `judge`" in lines
+    assert (
+        "- repeat-1 `icc_backchannel`: evaluation failed; see "
+        "`v10/reference/logs/evaluate-icc_backchannel.log`" in lines
+    )
+    # note (luojiaxuan): a subset with no eligible sample is not listed.
+    assert not any("candor_pause_handling`" in line for line in lines)
+
+
 def test_results_of_a_v10_only_run_have_no_v15_section(tmp_path: Path) -> None:
     run_root = tmp_path / "run"
     (run_root / "repeat-1").mkdir(parents=True)
