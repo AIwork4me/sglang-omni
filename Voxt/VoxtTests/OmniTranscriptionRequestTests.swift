@@ -85,6 +85,15 @@ final class OmniTranscriptionRequestTests: XCTestCase {
         XCTAssertEqual(fieldValue("vad_max_chunk_seconds", in: body), "24.0")
     }
 
+    func testParakeetFinalRequestsCarryOnlyVoxtsChunkLength() {
+        let request = OmniASRRuntime.parakeetFinalRequest(samples: [0, 0.1], sampleRate: 16000, chunkDuration: 1200)
+        let body = OmniMultipartBody.transcription(request, modelName: "m", boundary: "b")
+
+        XCTAssertEqual(fieldValue("chunk_duration", in: body), "1200.0")
+        XCTAssertNil(fieldValue("language", in: body))
+        XCTAssertNil(fieldValue("max_new_tokens", in: body))
+    }
+
     func testRequestsWithoutALayoutLeaveTheServerDefault() {
         let request = OmniTranscriptionRequest(
             samples: [0],
@@ -185,6 +194,43 @@ final class OmniRealtimeSessionUpdateTests: XCTestCase {
         XCTAssertEqual(
             assembler.apply(eventIndex: 2, segmentID: 1, text: "world", isFinal: true),
             .display(confirmedText: "Hello world", provisionalText: "")
+        )
+    }
+
+    func testNemotronLiveSessionsPassTheLatencyAndLanguage() throws {
+        let session = try session(OmniRealtimeTranscriptionSession.sessionUpdate(
+            language: "zh-CN",
+            chunkMilliseconds: 560
+        ))
+
+        XCTAssertEqual(session["language"] as? String, "zh-CN")
+        XCTAssertEqual(session["chunk_ms"] as? Int, 560)
+        XCTAssertNil(session["prompt"])
+    }
+
+    /// Voxt maps a live language onto the prompt languages in the checkpoint's
+    /// config.json, as it did with the loaded Swift model's dictionary.
+    func testNemotronPromptLanguagesComeFromTheCheckpointConfig() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data(#"{"default_language":"auto","prompt":{"prompt_dictionary":{"auto":101,"en-US":0,"zh-CN":4,"ja-JA":10,"ja-JP":10}}}"#.utf8)
+            .write(to: directory.appendingPathComponent("config.json"))
+
+        let prompt = try OmniASRRuntime.nemotronPromptLanguages(modelDirectory: directory)
+        XCTAssertEqual(prompt.defaultLanguage, "auto")
+        XCTAssertEqual(Set(prompt.languages), ["auto", "en-US", "zh-CN", "ja-JA", "ja-JP"])
+        XCTAssertEqual(
+            MLXTranscriptionPlanning.nativeNemotronLanguage(
+                requested: "zh", availableLanguages: prompt.languages, defaultLanguage: prompt.defaultLanguage
+            ),
+            "zh-CN"
+        )
+        XCTAssertEqual(
+            MLXTranscriptionPlanning.nativeNemotronLanguage(
+                requested: "ja", availableLanguages: prompt.languages, defaultLanguage: prompt.defaultLanguage
+            ),
+            "ja-JA"
         )
     }
 

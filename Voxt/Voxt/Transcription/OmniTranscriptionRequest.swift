@@ -8,6 +8,8 @@ nonisolated enum OmniASRModelKind: String, Sendable, CaseIterable {
     case sortformer = "sortformer"
     case mossTranscribeDiarize = "moss_transcribe_diarize"
     case cohereTranscribe = "cohere_transcribe"
+    case nemotronASR = "nemotron_asr"
+    case parakeet
 }
 
 /// Long audio cut at speech by the server's Silero VAD, with Voxt's settings.
