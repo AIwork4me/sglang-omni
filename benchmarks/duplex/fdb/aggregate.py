@@ -161,8 +161,9 @@ def v10_metrics(repeat_dir: Path) -> RepeatMetrics:
 
 def v10_unevaluated(repeat_dir: Path) -> list[str]:
     """The eligible v1.0 subsets summary.json lacks, as pending or failed. The
-    evaluator writes logs/evaluate-<subset>.log as it starts, so a subset with
-    that log and no result failed, and one without it has not run yet."""
+    evaluator writes logs/evaluate-<subset>.log for every subset it runs, passing
+    or failing, so a subset with that log and no result failed, and one without
+    it has not been reached."""
     tree = repeat_dir / V10_DIR / "reference"
     if not (tree / "manifest.json").is_file():
         return []

@@ -81,7 +81,7 @@ A run has three steps, then an aggregation. Each step starts the server it needs
 |---|---|---|
 | 1 | `generate` | Starts the model server, streams the selected inputs to `/v1/realtime` (two sessions per v1.5 pair, one per v1.0 sample), records the model's audio, stops the server, then cuts a fixed observation window from each session |
 | 2 | `asr` | Transcribes the windows with word timestamps (Parakeet); for v1.5 also computes speech intervals with the official timing code |
-| 3 | `judge` | Runs the official v1.0 evaluator on each v1.0 subset, starts the judge server when the v1.5 pairs or the v1.0 interruptions need it, judges them, stops the server, and writes the per-repeat summaries |
+| 3 | `judge` | Runs the official v1.0 evaluator on the v1.0 subsets that need no LLM, then judges the v1.5 pairs and the v1.0 interruption subset (with `JUDGE=qwen` it starts the judge server for them and stops it after), and writes the per-repeat summaries |
 | | `aggregate` | Combines the repeats of a run into `RESULTS.md` |
 
 Run a small preflight first. It takes one pair per v1.5 category and three samples per v1.0 subset (about 15 minutes) and catches environment problems before a long run. v1.0 needs three samples rather than one because the official turn-taking and interruption evaluators divide by the number of takeovers and fail when no selected sample takes the turn.
@@ -108,7 +108,7 @@ python -m benchmarks.duplex.fdb aggregate --run-name minicpmo-12
 
 `generate` refuses to write into a repeat that already holds a recording; to redo one, delete its `repeat-N/` directory and run its three steps again. `asr` and `judge` resume finished work when rerun.
 
-Every subcommand takes `--log-level` (`info` by default). With `--log-level debug`, a step also prints the server and recorder logs it writes, each line prefixed with the log's name, such as `[judge-server]` or `[record-shard-0]`. The logs are written to `repeat-N/logs/` at either level.
+Every subcommand takes `--log-level` (`info` by default). With `--log-level debug`, a step also prints the server and recorder logs it writes, each line prefixed with the log's name, such as `[judge-server]` or `[record-shard-0]`. The logs are written under `repeat-N/` at either level (see the files table in [Results](#results)).
 
 ### Choosing samples
 
@@ -154,7 +154,7 @@ Sessions run in real time, so `generate` dominates the wall time. Approximate ti
 | 60 v1.0 samples (12 per subset) | ~20 min | ~1 min | ~1 min |
 | 727 v1.0 samples | ~3.6 h | ~10 min | ~5 min |
 
-A v1.5 session lasts about 15 s and a v1.0 sample about 18 s on average. Most of a v1.5 `judge` is the semantic judge, which runs 8 thinking-mode batches of up to 8 pairs concurrently at about 5 minutes per batch; the behavior judge sends up to 16 requests at once. `generate --num-shards 2` roughly halves the generation time, but read the note on it in [Notes](#notes) first.
+A v1.5 session lasts about 15 s and a v1.0 sample about 18 s on average. Most of a v1.5 `judge` is the semantic judge, which runs 8 thinking-mode batches of up to 8 pairs concurrently at about 5 minutes per batch; the Qwen behavior judge sends up to 16 requests at once. `generate --num-shards 2` roughly halves the generation time, but read the note on it in [Notes](#notes) first.
 
 ## Results
 
@@ -182,7 +182,7 @@ With `JUDGE=qwen` the v1.5 section adds the semantic table. From the same valida
 | talking_to_other | 50.0 ± 23.6% | 100.0 ± 0.0% | 75.0 ± 35.4% | 66.7 ± 0.0% | 58.3 ± 11.8% | 83.3 ± 23.6% | 16.7 ± 23.6% | 83.3 ± 23.6% |
 | background_speech | 83.3 ± 23.6% | 100.0 ± 0.0% | 100.0 ± 0.0% | 100.0 ± 0.0% | 16.7 ± 23.6% | 100.0 ± 0.0% | 16.7 ± 23.6% | 100.0 ± 0.0% |
 
-The v1.0 section has one row per selected subset. `Selected` counts the recorded samples, `Eligible` the ones the official evaluator can score, and `Evaluated` the ones it scored; then come `Takeover rate`, `Latency (s)`, `Relevance (0-5)`, `Judge retries`, `Backchannel frequency` and `Backchannel JSD`, with `n/a` where the subset's task does not report a number. A subset whose sessions all failed still has a row, with `Eligible 0`. A subset that is not evaluated shows `n/a` from `Evaluated` on and is listed under the table as not evaluated yet (`judge` has not run) or failed (with its evaluator log). A nonzero `Judge retries` means the interruption takeover rate is inflated (see [v1.0 scoring](#v10-scoring)).
+The v1.0 section has one row per selected subset. `Selected` counts the recorded samples, `Eligible` the ones the official evaluator can score, and `Evaluated` the ones it scored; then come `Takeover rate`, `Latency (s)`, `Relevance (0-5)`, `Judge retries`, `Backchannel frequency` and `Backchannel JSD`, with `n/a` where the subset's task does not report a number. A subset whose sessions all failed still has a row, with `Eligible 0`. A subset that a repeat has not evaluated is listed under the table as not evaluated yet (`judge` has not reached it) or failed (with its evaluator log); its cells average the repeats that did evaluate it, and show `n/a` when none did. A nonzero `Judge retries` means the interruption takeover rate is inflated (see [v1.0 scoring](#v10-scoring)).
 
 Each repeat writes these files under `$FDB_WORK/runs/RUN_NAME/repeat-N/`:
 
@@ -264,7 +264,7 @@ The ports, the judge config and the compile caches follow the GPU index: the mod
 | `WARNING: the v1.0 evaluation failed for ...` | The traceback is at the end of `repeat-N/v10/reference/logs/evaluate-<subset>.log`. A `ZeroDivisionError` in `candor_turn_taking` or `synthetic_user_interruption` means no selected sample took the turn, so select more samples in a new run. After fixing another cause, rerun `judge`; it evaluates the missing subsets again |
 | `judge request ... got no parsable rating in 3 attempts` | The v1.0 relevance judge answered without a rating; the ledger in `v10/reference/judge/` has each reply. The official parser needs `Analysis: <text>`, a line break, then `I would rate the AI's response as <digit>`. The attempts share a seed, so a local judge repeats the same reply and a rerun fails again |
 | `custom judge identity changed; use a new --out` | The judge config changed since this repeat was judged, for example after an SGLang upgrade. Delete `repeat-N/judge-qwen` and rerun `judge` |
-| `Control check failed: this judge configuration is not accepted.` | The judge missed a control case, listed in the output; nothing graded alongside the controls is kept. Check that the judge server runs the pinned Qwen3.8-27B revision, then rerun `judge` |
+| `Control check failed: this judge configuration is not accepted.` | The judge missed a control case, listed in the output; nothing graded alongside the controls is kept. Check that the judge server runs the pinned Qwen3.8-27B revision; do not grade with a configuration that fails the controls |
 | `... changed since this directory was created; use a new --out` | The semantic judge settings, prompt or inputs changed since this repeat was graded. Delete `repeat-N/semantic-qwen` and rerun `judge` |
 | `model_mismatch` with `JUDGE=gpt` | The endpoint answered with a model other than `gpt-4o-2024-08-06`; use an endpoint that serves exactly that model |
 | `No module named 'onnx'` (or `einops`) in `model-server.log`, or `ModuleNotFoundError` in `asr` | Rerun `setup` |
@@ -397,11 +397,11 @@ The official evaluator has a retry bug: when a rating does not parse, it resends
 
 ### Verification
 
-The unit tests run the official formulas on synthetic fixtures without a GPU or API key, and cover export, missing samples, valid silence, timing, ASR deduplication, bounded judging, resumption, and the runbook's selection, phase gating and aggregation for both datasets:
+The unit tests run the official formulas on synthetic fixtures without a GPU or API key, and cover export, missing samples, valid silence, timing, ASR deduplication, bounded and concurrent judging, the semantic judge's control gate, resumption, and the runbook's selection, phase gating, server checks and aggregation for both datasets:
 
 ```bash
 FDB_REFERENCE_SOURCE="$FDB_SOURCE" python -m pytest -q \
-    tests/unit_test/benchmarks/test_duplex_reference*.py tests/unit_test/benchmarks/test_fdb*.py
+    tests/unit_test/benchmarks/test_duplex*.py tests/unit_test/benchmarks/test_fdb*.py
 ```
 
 Export is deterministic: exporting a recording again reproduces every eligible WAV byte for byte, and summarizing saved transcripts and intervals again reproduces the same summaries.

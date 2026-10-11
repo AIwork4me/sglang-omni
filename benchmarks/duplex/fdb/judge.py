@@ -327,6 +327,12 @@ def judge(settings: Settings, repeat: int, retry_failed: bool) -> None:
         [],
         server=None,
     )
+    if failed_v10:
+        # note (luojiaxuan): said here as well, since a judge phase that stops
+        # the step would otherwise hide it.
+        log(f"WARNING: the v1.0 evaluation failed for {', '.join(failed_v10)}")
+    else:
+        pass
     if has_v15 or judged_v10:
         judge_with = judge_with_qwen if settings.judge == "qwen" else judge_with_gpt
         is_judge_ok, failed_judged = judge_with(

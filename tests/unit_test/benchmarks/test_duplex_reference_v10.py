@@ -367,6 +367,32 @@ def test_reference_evaluate_records_the_endpoint_the_client_resolved(
     assert [judge.summary()["official"] for judge in judges] == [False, True]
 
 
+def test_reference_evaluate_needs_no_key_for_judge_free_subsets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from benchmarks.eval import benchmark_duplex_v10
+
+    monkeypatch.setattr(benchmark_duplex_v10, "verify_reference", lambda *_: {})
+    monkeypatch.setattr(
+        benchmark_duplex_v10,
+        "evaluate",
+        lambda tree, paths, subsets, judge: {
+            "subsets": {subset: {"result": {"judge": judge}} for subset in subsets}
+        },
+    )
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    argv = ["reference-evaluate", "--tree", str(tmp_path), "--reference-source", "x"]
+    with contextlib.redirect_stdout(io.StringIO()):
+        for subset in (
+            "candor_pause_handling",
+            "candor_turn_taking",
+            "icc_backchannel",
+        ):
+            assert main([*argv, "--subset", subset]) == 0
+    with pytest.raises(SystemExit, match="OPENAI_API_KEY"):
+        main([*argv, "--subset", "synthetic_user_interruption"])
+
+
 def test_in_process_evaluator_traceback_lands_in_the_subset_log(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
