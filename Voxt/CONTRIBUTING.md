@@ -85,7 +85,9 @@ Voxt/tools/package_local_app.sh \
 The command creates a DMG, ZIP, PKG, and SHA-256 files under a timestamped
 directory. To install the locally built app for manual verification, append
 `--install --open`. If a Developer ID identity is available locally, omit
-`--no-sign` to produce a locally signed package. These local packages are for
+`--no-sign` to produce a locally signed package, and pass the Developer ID
+provisioning profile with `--provisioning-profile`; without it, the signed app
+cannot use the Keychain. These local packages are for
 development and testing; they are not Apple-notarized releases.
 
 The `Voxt macOS Notarized Package` workflow is also reserved and disabled by

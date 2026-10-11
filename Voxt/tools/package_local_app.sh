@@ -19,6 +19,7 @@ UNIVERSAL_BUILD=false
 SIGN_APP=true
 APP_SIGN_IDENTITY="${DEVELOPER_ID_APP_IDENTITY:-}"
 INSTALLER_SIGN_IDENTITY="${DEVELOPER_ID_INSTALLER_IDENTITY:-}"
+PROVISIONING_PROFILE=""
 VERSION=""
 BUILD_NUMBER=""
 APP_NAME="Voxt"
@@ -45,6 +46,9 @@ Options:
   --universal             Build both arm64 and x86_64 via generic macOS destination.
   --app-sign-identity ID  Developer ID Application identity for app signing.
   --pkg-sign-identity ID  Developer ID Installer identity for pkg signing.
+  --provisioning-profile PATH
+                          Embed this Developer ID provisioning profile. Signing keeps
+                          the Keychain entitlements only with a profile.
   --native-runtime PATH   Embed a built Omni runtime in the app bundle.
   --no-sign               Do not sign the app after building.
   -h, --help              Show this help.
@@ -130,6 +134,11 @@ while [[ "$#" -gt 0 ]]; do
       [[ -n "$INSTALLER_SIGN_IDENTITY" ]] || die "--pkg-sign-identity requires a value"
       shift 2
       ;;
+    --provisioning-profile)
+      PROVISIONING_PROFILE="${2:-}"
+      [[ -n "$PROVISIONING_PROFILE" ]] || die "--provisioning-profile requires a value"
+      shift 2
+      ;;
     --native-runtime)
       NATIVE_RUNTIME_DIR="${2:-}"
       [[ -n "$NATIVE_RUNTIME_DIR" ]] || die "--native-runtime requires a value"
@@ -173,6 +182,11 @@ fi
 
 if [[ "$OPEN_AFTER_INSTALL" == "true" && "$INSTALL_APP" != "true" ]]; then
   die "--open requires --install"
+fi
+
+if [[ -n "$PROVISIONING_PROFILE" ]]; then
+  [[ -f "$PROVISIONING_PROFILE" ]] || die "provisioning profile not found: $PROVISIONING_PROFILE"
+  [[ "$SIGN_APP" == "true" ]] || die "--provisioning-profile cannot be combined with --no-sign"
 fi
 
 if [[ -z "$VERSION" ]]; then
@@ -276,15 +290,47 @@ if [[ "$SIGN_APP" == "true" && -n "$APP_SIGN_IDENTITY" ]]; then
   [[ -n "$APP_BUNDLE_ID" ]] || die "unable to resolve CFBundleIdentifier"
 
   SIGNING_ENTITLEMENTS="$(mktemp)"
-  sed "s#\\\$(PRODUCT_BUNDLE_IDENTIFIER)#${APP_BUNDLE_ID}#g" \
-    "$ROOT/Voxt/Voxt.entitlements" > "$SIGNING_ENTITLEMENTS"
-  # Developer ID distribution does not use a provisioning profile. These
-  # identity and keychain-group entitlements are restricted to profile-backed
-  # signing, so custom signing must omit them for macOS to launch the app.
-  /usr/libexec/PlistBuddy -c 'Delete :com.apple.application-identifier' "$SIGNING_ENTITLEMENTS"
-  /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.team-identifier' "$SIGNING_ENTITLEMENTS"
-  /usr/libexec/PlistBuddy -c 'Delete :keychain-access-groups' "$SIGNING_ENTITLEMENTS"
-  if grep -qE '\\$\\([A-Za-z_][A-Za-z0-9_]*\\)' "$SIGNING_ENTITLEMENTS"; then
+  if [[ -n "$PROVISIONING_PROFILE" ]]; then
+    PROFILE_PLIST="$(mktemp)"
+    security cms -D -i "$PROVISIONING_PROFILE" > "$PROFILE_PLIST" || die "unable to decode provisioning profile"
+    PROFILE_PREFIX="$(/usr/libexec/PlistBuddy -c 'Print :ApplicationIdentifierPrefix:0' "$PROFILE_PLIST")" \
+      || die "provisioning profile has no ApplicationIdentifierPrefix"
+    PROFILE_TEAM_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$PROFILE_PLIST")" \
+      || die "provisioning profile has no TeamIdentifier"
+    PROFILE_APP_IDENTIFIER="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$PROFILE_PLIST")" \
+      || die "provisioning profile has no application identifier"
+    PROFILE_KEYCHAIN_GROUPS="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:keychain-access-groups' "$PROFILE_PLIST")" \
+      || die "provisioning profile has no Keychain access groups"
+    PROFILE_EXPIRATION="$(plutil -extract ExpirationDate raw -o - "$PROFILE_PLIST")" \
+      || die "provisioning profile has no expiration date"
+    PROFILE_ALL_DEVICES="$(/usr/libexec/PlistBuddy -c 'Print :ProvisionsAllDevices' "$PROFILE_PLIST" 2>/dev/null || true)"
+    rm -f "$PROFILE_PLIST"
+
+    APP_IDENTIFIER="$PROFILE_PREFIX.$APP_BUNDLE_ID"
+    [[ "$PROFILE_ALL_DEVICES" == "true" ]] || die "provisioning profile is not a Developer ID profile"
+    [[ "$PROFILE_APP_IDENTIFIER" == "$APP_IDENTIFIER" ]] \
+      || die "provisioning profile is for $PROFILE_APP_IDENTIFIER, expected $APP_IDENTIFIER"
+    grep -qF -e "$APP_IDENTIFIER" -e "$PROFILE_PREFIX.*" <<< "$PROFILE_KEYCHAIN_GROUPS" \
+      || die "provisioning profile does not allow the Keychain group $APP_IDENTIFIER"
+    [[ "$(date -j -u -f '%Y-%m-%dT%H:%M:%SZ' "$PROFILE_EXPIRATION" '+%s')" -gt "$(date '+%s')" ]] \
+      || die "provisioning profile expired on $PROFILE_EXPIRATION"
+
+    cp "$PROVISIONING_PROFILE" "$APP_PATH/Contents/embedded.provisionprofile"
+    sed \
+      -e "s#\\\$(PRODUCT_BUNDLE_IDENTIFIER)#${APP_BUNDLE_ID}#g" \
+      -e "s#\\\$(AppIdentifierPrefix)#${PROFILE_PREFIX}.#g" \
+      -e "s#\\\$(DEVELOPMENT_TEAM)#${PROFILE_TEAM_IDENTIFIER}#g" \
+      "$ROOT/Voxt/Voxt.entitlements" > "$SIGNING_ENTITLEMENTS"
+  else
+    sed "s#\\\$(PRODUCT_BUNDLE_IDENTIFIER)#${APP_BUNDLE_ID}#g" \
+      "$ROOT/Voxt/Voxt.entitlements" > "$SIGNING_ENTITLEMENTS"
+    # macOS refuses to launch an app that claims these entitlements without a
+    # provisioning profile, so this signature drops them and the Keychain with them.
+    /usr/libexec/PlistBuddy -c 'Delete :com.apple.application-identifier' "$SIGNING_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c 'Delete :com.apple.developer.team-identifier' "$SIGNING_ENTITLEMENTS"
+    /usr/libexec/PlistBuddy -c 'Delete :keychain-access-groups' "$SIGNING_ENTITLEMENTS"
+  fi
+  if grep -qF '$(' "$SIGNING_ENTITLEMENTS"; then
     rm -f "$SIGNING_ENTITLEMENTS"
     die "failed to expand signing variables in entitlements"
   fi
@@ -340,6 +386,20 @@ if [[ "$SIGN_APP" == "true" && -n "$APP_SIGN_IDENTITY" ]]; then
     "$APP_PATH"
 
   rm -f "$SIGNING_ENTITLEMENTS"
+
+  if [[ -n "$PROVISIONING_PROFILE" ]]; then
+    SIGNED_ENTITLEMENTS="$(mktemp)"
+    codesign --display --entitlements - --xml "$APP_PATH" > "$SIGNED_ENTITLEMENTS" 2>/dev/null
+    SIGNED_KEYCHAIN_GROUP="$(/usr/libexec/PlistBuddy -c 'Print :keychain-access-groups:0' "$SIGNED_ENTITLEMENTS" 2>/dev/null || true)"
+    rm -f "$SIGNED_ENTITLEMENTS"
+    SIGNED_TEAM_IDENTIFIER="$(codesign --display --verbose=4 "$APP_PATH" 2>&1 | awk -F= '/^TeamIdentifier=/ {print $2; exit}')"
+    [[ "$SIGNED_KEYCHAIN_GROUP" == "$APP_IDENTIFIER" ]] \
+      || die "signed app has Keychain group '$SIGNED_KEYCHAIN_GROUP', expected $APP_IDENTIFIER"
+    [[ "$SIGNED_TEAM_IDENTIFIER" == "$PROFILE_TEAM_IDENTIFIER" ]] \
+      || die "signing certificate is from team '$SIGNED_TEAM_IDENTIFIER', but the provisioning profile is for $PROFILE_TEAM_IDENTIFIER"
+  else
+    echo "warning: no provisioning profile; the signed app cannot use the Keychain" >&2
+  fi
 elif [[ "$SIGN_APP" == "true" ]]; then
   echo "warning: no Developer ID Application identity found; app will remain unsigned" >&2
 fi
