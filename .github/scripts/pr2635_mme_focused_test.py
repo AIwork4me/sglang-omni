@@ -2,19 +2,43 @@
 
 import asyncio
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+
 from benchmarks.eval.benchmark_omni_videomme import VideoEvalConfig, run_video_eval
-from tests.test_model.conftest import OMNI_CI_QWEN_FIXTURES
 from tests.test_model.omni_ci_config import OmniCiModelPreset
-from tests.test_model.omni_router_utils import ManagedRouterHandle
+from tests.test_model.omni_router_utils import (
+    CiRouterTopology,
+    ManagedRouterHandle,
+    launch_managed_router,
+)
 from tests.test_model.test_qwen3_omni_videomme_talker_ci import (
     load_short_answer_samples,
 )
 
-OMNI_CI_QWEN_FIXTURES["test_pr2635_videomme_talker_focused"] = (
-    "qwen3_omni_bf16_disagg_server"
-)
+
+@pytest.fixture(scope="module")
+def omni_ci_server(
+    tmp_path_factory: pytest.TempPathFactory,
+    omni_ci_model: OmniCiModelPreset,
+) -> Iterator[ManagedRouterHandle]:
+    with launch_managed_router(
+        tmp_path_factory=tmp_path_factory,
+        model_path=os.environ["SGLANG_OMNI_TEST_MINICPMO_MODEL"],
+        model_name=omni_ci_model.name,
+        worker_extra_args=(
+            "--thinker.factory.max_seq_len 32768 "
+            "--thinker.engine.mem_fraction_static 0.55 "
+            "--talker.engine.mem_fraction_static 0.15"
+        ),
+        router_topology=CiRouterTopology.OMNI_AUDIO,
+        num_workers=1,
+        num_gpus_per_worker=1,
+        generation_streaming=False,
+    ) as router:
+        yield router
 
 
 def test_mme_talker_focused(
