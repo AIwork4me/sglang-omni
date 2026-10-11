@@ -2,6 +2,11 @@ name: PR2635 H100 Compatibility Validation
 
 on:
   workflow_dispatch:
+    inputs:
+      phase:
+        type: choice
+        options: [full, focused]
+        default: full
 
 permissions:
   contents: read
@@ -25,6 +30,10 @@ jobs:
       NCCL_NVLS_ENABLE: "0"
     steps:
       - uses: actions/checkout@v4
+      - name: Preserve Focused Diagnostic
+        shell: bash
+        run: cp .github/scripts/pr2635_mme_focused_test.py "$RUNNER_TEMP/pr2635_mme_focused_test.py"
+      - uses: actions/checkout@v4
         with:
           ref: 615ddc21cb1bcc4f0017fa4f27a654bcb5a1ae42
       - uses: ./.github/actions/omni-setup
@@ -33,6 +42,10 @@ jobs:
           install-deps: "true"
       - name: Build Existing CI Router
         run: bash .github/scripts/prepare_rust_router.sh build
+      - name: Match A and D Video Dependencies
+        run: |
+          source omni/bin/activate
+          python -m pip install decord==0.6.0 audioread==3.1.0
       - name: Freeze Model and Dataset Evidence
         shell: bash
         run: |
@@ -74,6 +87,7 @@ jobs:
           git rev-parse HEAD > evidence/commit.txt
           printenv OMNI_CI_CPUSET > evidence/cpu-affinity.txt
       - name: Run Original A CI Tests
+        if: inputs.phase == 'full'
         continue-on-error: true
         shell: bash
         run: |
@@ -85,6 +99,23 @@ jobs:
             -v -s --basetemp="$PWD/evidence/pytest" \
             --junitxml=evidence/junit.xml 2>&1 | tee evidence/pytest.log
           exit "${PIPESTATUS[0]}"
+      - name: Run Focused A Histories
+        if: inputs.phase == 'focused'
+        shell: bash
+        run: |
+          source omni/bin/activate
+          cp "$RUNNER_TEMP/pr2635_mme_focused_test.py" tests/test_model/test_pr2635_mme_focused.py
+          export PYTHONPATH=$PWD
+          for history in cold pair; do
+            for repetition in 1 2 3; do
+              PR2635_HISTORY="$history" PR2635_OUTPUT="$PWD/evidence/focused/$history-$repetition" \
+                pytest tests/test_model/test_pr2635_mme_focused.py -v -s \
+                --basetemp="$PWD/evidence/pytest-$history-$repetition" \
+                --junitxml="evidence/focused-$history-$repetition.xml" \
+                2>&1 | tee "evidence/focused-$history-$repetition.log"
+              test "${PIPESTATUS[0]}" -eq 0
+            done
+          done
       - name: Upload Evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -99,6 +130,8 @@ jobs:
             evidence/pytest/**/videoamme_results.json
             evidence/pytest/**/videomme_results.json
             evidence/pytest/**/server.log
+            evidence/focused/**/videomme_results.json
+            evidence/pytest-*/**/server.log
           retention-days: 30
       - uses: actions/checkout@v4
         if: always()
@@ -128,6 +161,7 @@ jobs:
           git rev-parse HEAD > evidence/commit.txt
           printenv OMNI_CI_CPUSET > evidence/cpu-affinity.txt
       - name: Run Original D CI Tests
+        if: inputs.phase == 'full'
         shell: bash
         run: |
           source omni/bin/activate
@@ -138,6 +172,23 @@ jobs:
             -v -s --basetemp="$PWD/evidence/pytest" \
             --junitxml=evidence/junit.xml 2>&1 | tee evidence/pytest.log
           exit "${PIPESTATUS[0]}"
+      - name: Run Focused D Histories
+        if: inputs.phase == 'focused'
+        shell: bash
+        run: |
+          source omni/bin/activate
+          cp "$RUNNER_TEMP/pr2635_mme_focused_test.py" tests/test_model/test_pr2635_mme_focused.py
+          export PYTHONPATH=$PWD
+          for history in cold pair; do
+            for repetition in 1 2 3; do
+              PR2635_HISTORY="$history" PR2635_OUTPUT="$PWD/evidence/focused/$history-$repetition" \
+                pytest tests/test_model/test_pr2635_mme_focused.py -v -s \
+                --basetemp="$PWD/evidence/pytest-$history-$repetition" \
+                --junitxml="evidence/focused-$history-$repetition.xml" \
+                2>&1 | tee "evidence/focused-$history-$repetition.log"
+              test "${PIPESTATUS[0]}" -eq 0
+            done
+          done
       - name: Upload D Evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -152,4 +203,6 @@ jobs:
             evidence/pytest/**/videoamme_results.json
             evidence/pytest/**/videomme_results.json
             evidence/pytest/**/server.log
+            evidence/focused/**/videomme_results.json
+            evidence/pytest-*/**/server.log
           retention-days: 30
