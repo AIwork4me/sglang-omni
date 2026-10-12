@@ -1076,7 +1076,10 @@ metadata admission limit</p></li>
 </ul>
 <p>For same-process stream targets:</p>
 <ul class="simple">
-<li><p>the stage sends the chunk through <code class="docutils literal notranslate"><span class="pre">LocalStageDispatcher.send_stream_chunk()</span></code></p></li>
+<li><p>the stage sends consecutive chunks for one target through one
+<code class="docutils literal notranslate"><span class="pre">LocalStageDispatcher.send_stream_chunks()</span></code> call, in order</p></li>
+<li><p>the receiver checks each chunk as before and enqueues one <code class="docutils literal notranslate"><span class="pre">stream_chunk</span></code>
+message per chunk</p></li>
 <li><p>the receiver gets the original Python object and metadata by reference</p></li>
 <li><p>the same read-only and lifetime caveats as payload LOCAL_OBJECT apply</p></li>
 </ul>
