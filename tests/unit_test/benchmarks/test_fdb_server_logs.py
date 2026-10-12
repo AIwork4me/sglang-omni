@@ -103,7 +103,7 @@ def test_follower_streams_appended_lines_and_flushes_the_rest_on_exit(
                 sys.executable,
                 "-c",
                 "import sys; print('session 1 pass', flush=True); sys.stdin.read(); "
-                "print('session 2 fail'); print('unterminated', end='')",
+                + "print('session 2 fail'); print('unterminated', end='')",
             ],
             stdin=subprocess.PIPE,
             stdout=log_handle,
@@ -161,7 +161,7 @@ def test_server_handle_stops_the_step_with_the_log_tail_once_the_server_exited(
                 sys.executable,
                 "-c",
                 "print('loading weights'); print('CUDA error: out of memory'); "
-                "raise SystemExit(3)",
+                + "raise SystemExit(3)",
             ],
             stdout=log_handle,
         )
