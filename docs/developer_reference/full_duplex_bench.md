@@ -300,6 +300,27 @@ python -m benchmarks.eval.benchmark_duplex_reference export \
 
 `record` takes the full dataset unless `--max-per-subset N` or repeated `--sample-id category/id` narrows it, and exits 0 only when every selected session passes. `export` cuts the observation windows into a new directory without touching the recording. With `--dataset-root`, every dataset pair that was not recorded counts as missing, so a partial run also passes `--only category/id` for each recorded pair. Repeated `--run` takes disjoint shards; `--engine` is a free label for the scored cohort.
 
+A turn-based (half-duplex) endpoint speaks the conversation protocol instead of the native session protocol: it takes a `turn_detection` object in `session.update`, sends none of the `sglang.input_audio.*` receipts or `sglang.unit.done`, and streams `response.audio.delta` at 24 kHz. The profile `qwen3-omni-half-duplex` switches the recorder, the protocol oracle and the export to that protocol:
+
+```bash
+python -m benchmarks.eval.benchmark_duplex_v15 record \
+    --profile qwen3-omni-half-duplex \
+    --turn-detection '{"type": "server_vad", "silence_duration_ms": 500}' \
+    --dataset-root "$FDB_DATASET" --dataset-revision "$(cat "$FDB_WORK/dataset/v1.5.revision")" \
+    --url "$REALTIME_URL" --model "$MODEL_ID" --model-revision "$MODEL_REVISION" \
+    --server-revision "$(git rev-parse HEAD)" --timeout "$SESSION_TIMEOUT_S" \
+    --output "$OUT/recording"
+
+python -m benchmarks.eval.benchmark_duplex_reference export \
+    --engine model --trace-format realtime-legacy-pcm16-v1 --run "$OUT/recording" \
+    --dataset-root "$FDB_DATASET" --out "$OUT/reference-audio"
+```
+
+- `--turn-detection` is required for this profile and rejected for native ones. It is sent once per session, so a detector sweep is one run per setting against the same server: `server_vad` takes `threshold`, `prefix_padding_ms` and `silence_duration_ms`, `semantic_vad` takes `eagerness`, and both take `interrupt_response`. The manifest records it under `config.legacy`. `benchmark_duplex_v10 record` takes the same options.
+- A session fails unless `session.updated` echoes the requested `turn_detection.type`, so a detector that silently falls back is caught. There are no input or drain receipts: the session ends `--legacy-tail` seconds (default 1.0) after the input with a no-op `session.update`, whose `session.updated` proves the server is alive.
+- Any `error` event fails the session. A response cancelled with reason `turn_detected` is accepted only after an `input_audio_buffer.speech_started` during it.
+- Simulated playout follows the server's barge-in: it is cut at `output_audio_buffer.cleared`, or at `input_audio_buffer.speech_started` unless the session set `interrupt_response: false`. The export applies the same cut, records `barge_in_cuts`, and marks a session eligible only when its protocol verdict is `pass`.
+
 Score:
 
 ```bash
