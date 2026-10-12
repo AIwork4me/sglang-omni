@@ -34,10 +34,11 @@ Why:
   GPU CI never runs on a Mac. A shared layer would break one side without CI
   noticing.
 
-The Apple code already in `sglang_omni` (`platforms/apple.py`,
-`mlx_model_worker.py`, `MlxTpModelWorker`) stays but is not extended. If a
-change really needs a cross-path abstraction, open an issue and agree on it
-with a maintainer first.
+The legacy MLX code in `sglang_omni` (`mlx_model_worker.py`,
+`MlxTpModelWorker`, the per-model `mlx/` packages) is removed in
+[#2725](https://github.com/sgl-project/sglang-omni/pull/2725); do not add it
+back. If a change really needs a cross-path abstraction, open an issue and
+agree on it with a maintainer first.
 
 ## Rule 2: Contribution requirements
 
