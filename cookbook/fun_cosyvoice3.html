@@ -1179,6 +1179,7 @@ in sync if you change the hop):</p>
 </tbody>
 </table>
 </div>
+<p>Sampling is repetition-aware, as in upstream CosyVoice: a sampled speech token that already appears among the last 10 generated tokens is masked and redrawn once from the full distribution at the request temperature. Greedy requests (<code class="docutils literal notranslate"><span class="pre">top_k</span> <span class="pre">=</span> <span class="pre">1</span></code>) sample without the redraw.</p>
 </section>
 <section id="benchmarking">
 <h2>Benchmarking<a class="headerlink" href="#benchmarking" title="Link to this heading">#</a></h2>
