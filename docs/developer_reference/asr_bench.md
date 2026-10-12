@@ -143,7 +143,7 @@ Then:
 
 ```bash
 cd /work/sglang-omni && . .venv/bin/activate
-export HF_HUB_OFFLINE=1 SGLANG_OMNI_STRICT_PORT=1 SGLANG_OMNI_TORCH_COMPILE_DEFAULT=0
+export HF_HUB_OFFLINE=1 SGLANG_OMNI_STRICT_PORT=1 SGLANG_OMNI_TORCH_COMPILE_DEFAULT=0 SGLANG_OMNI_STARTUP_TIMEOUT=1800
 export TORCHINDUCTOR_CACHE_DIR=/work/torchinductor
 find /work/results -name server.pid -exec bash -c 'kill -9 -- -$(cat "$1") 2>/dev/null' _ {} \;
 timeout 600 bash -c 'until [ $(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits) -lt 1024 ]; do sleep 5; done' && echo GPU_FREE
@@ -154,7 +154,7 @@ git rev-parse HEAD > $OUT/commit.txt
 python -m pip freeze --exclude-editable > $OUT/freeze.txt
 ```
 
-CI sets `SGLANG_OMNI_TORCH_COMPILE_DEFAULT=0`. Without it, every model that does not set compile itself (Qwen3-ASR, Whisper, Fun-ASR) runs `torch.compile`. MOSS-Transcribe-Diarize turns compile on itself. `TORCHINDUCTOR_CACHE_DIR` keeps its compile cache on the `/work` mount, so it survives a new container. Delete that directory to measure a cold start.
+CI sets `SGLANG_OMNI_TORCH_COMPILE_DEFAULT=0`. Without it, every model that does not set compile itself (Qwen3-ASR, Whisper, Fun-ASR) runs `torch.compile`. MOSS-Transcribe-Diarize turns compile on itself. `TORCHINDUCTOR_CACHE_DIR` keeps its compile cache on the `/work` mount, so it survives a new container. Delete that directory to measure a cold start. `SGLANG_OMNI_STARTUP_TIMEOUT=1800` raises the server's own startup limit from 600 s. On a host with few CPU cores, a cold Whisper start can spend more than 600 s capturing CUDA graphs.
 
 The `find` line stops every server left over from an earlier run. The block must print `GPU_FREE`. If it does not, run `docker restart asr-bench` on the host, reattach as in Step 1, and run this step again. The block deletes earlier results of the same run, so a run is always redone whole.
 
@@ -162,7 +162,7 @@ The `find` line stops every server left over from an earlier run. The block must
 
 Each block starts a server for one model, runs EN and ZH, then stops the server. Run the blocks one at a time.
 
-In every block, the `curl` line must print `PORT_FREE`, the `timeout 1800` line `SERVER_READY` and the last line `GPU_FREE`. If `GPU_FREE` does not print, some server processes survived the `kill`. Restart the container as in Step 4 and redo the run. The `setsid` line starts the server in its own process group, so `kill` stops all of it. Each client run prints a line ending with `evaluated=1088/1088` (EN) or `evaluated=2020/2020` (ZH). The client exits with code 0 even when it skipped samples, so check [coverage](#coverage) after the run.
+In every block, the `curl` line must print `PORT_FREE`, the `timeout 1800` line `SERVER_READY` and the last line `GPU_FREE`. The `timeout 1800` line stops waiting as soon as the server process exits, and then prints the end of `server.log` instead of `SERVER_READY`. If `GPU_FREE` does not print, some server processes survived the `kill`. Restart the container as in Step 4 and redo the run. The `setsid` line starts the server in its own process group, so `kill` stops all of it. Each client run prints a line ending with `evaluated=1088/1088` (EN) or `evaluated=2020/2020` (ZH). The client exits with code 0 even when it skipped samples, so check [coverage](#coverage) after the run.
 
 ### Qwen3-ASR-1.7B
 
@@ -172,7 +172,7 @@ curl -sf localhost:8000/health > /dev/null || echo PORT_FREE
 setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ $OUT/qwen3/server.pid \
     .venv/bin/sgl-omni serve --model-path $QWEN3_ASR --model-name Qwen/Qwen3-ASR-1.7B --port 8000 \
     > $OUT/qwen3/server.log 2>&1 &
-timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; done' && echo SERVER_READY
+timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; grep -q "^State:[[:space:]]*[A-Y]" /proc/$(cat "$1")/status 2>/dev/null || exit 1; done' _ $OUT/qwen3/server.pid && echo SERVER_READY || tail -n 20 $OUT/qwen3/server.log
 python -m benchmarks.eval.benchmark_asr_seedtts --port 8000 --model-path Qwen/Qwen3-ASR-1.7B --lang en \
     --concurrencies 32 --repeats 1 --warmup \
     --dataset-revision $SEEDTTS_REV --output $OUT/qwen3/asr_en.json
@@ -191,7 +191,7 @@ curl -sf localhost:8000/health > /dev/null || echo PORT_FREE
 setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ $OUT/whisper/server.pid \
     .venv/bin/sgl-omni serve --model-path $WHISPER --model-name openai/whisper-large-v3 --port 8000 \
     > $OUT/whisper/server.log 2>&1 &
-timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; done' && echo SERVER_READY
+timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; grep -q "^State:[[:space:]]*[A-Y]" /proc/$(cat "$1")/status 2>/dev/null || exit 1; done' _ $OUT/whisper/server.pid && echo SERVER_READY || tail -n 20 $OUT/whisper/server.log
 python -m benchmarks.eval.benchmark_asr_seedtts --port 8000 --model-path openai/whisper-large-v3 --lang en \
     --concurrencies 32 --repeats 1 --warmup \
     --dataset-revision $SEEDTTS_REV --output $OUT/whisper/asr_en.json
@@ -210,7 +210,7 @@ curl -sf localhost:8000/health > /dev/null || echo PORT_FREE
 setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ $OUT/fun/server.pid \
     .venv/bin/sgl-omni serve --model-path $FUN_ASR --model-name FunAudioLLM/Fun-ASR-Nano-2512-hf --port 8000 \
     > $OUT/fun/server.log 2>&1 &
-timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; done' && echo SERVER_READY
+timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; grep -q "^State:[[:space:]]*[A-Y]" /proc/$(cat "$1")/status 2>/dev/null || exit 1; done' _ $OUT/fun/server.pid && echo SERVER_READY || tail -n 20 $OUT/fun/server.log
 python -m benchmarks.eval.benchmark_asr_seedtts --port 8000 --model-path FunAudioLLM/Fun-ASR-Nano-2512-hf --lang en \
     --concurrencies 32 --repeats 1 --warmup \
     --dataset-revision $SEEDTTS_REV --output $OUT/fun/asr_en.json
@@ -234,7 +234,7 @@ setsid bash -c 'echo $$ > "$1"; shift; exec "$@"' _ $OUT/moss_td/server.pid \
     .venv/bin/sgl-omni serve --model-path $MOSS_TD --model-name OpenMOSS-Team/MOSS-Transcribe-Diarize --port 8000 \
     --asr.engine.max_running_requests 16 --asr.engine.cuda_graph_max_bs 16 --mem-fraction-static 0.8 \
     > $OUT/moss_td/server.log 2>&1 &
-timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; done' && echo SERVER_READY
+timeout 1800 bash -c 'until curl -sf localhost:8000/health > /dev/null; do sleep 5; grep -q "^State:[[:space:]]*[A-Y]" /proc/$(cat "$1")/status 2>/dev/null || exit 1; done' _ $OUT/moss_td/server.pid && echo SERVER_READY || tail -n 20 $OUT/moss_td/server.log
 python -c 'import sys, benchmarks.eval.benchmark_asr_transcribe_diarize as b; b.DEFAULT_MAX_NEW_TOKENS = None; sys.exit(b.main(sys.argv[1:]))' \
     --use-existing-server --port 8000 --dataset movies800times --max-concurrency 16 --request-timeout-s 300 \
     --output-dir $OUT/moss_td/movies800times && echo CLIENT_OK

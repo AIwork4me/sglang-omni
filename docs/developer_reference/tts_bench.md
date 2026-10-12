@@ -200,6 +200,8 @@ echo 'export HF_HUB_OFFLINE=1' >> /work/env.sh
 source /work/env.sh
 ```
 
+`HF_HUB_OFFLINE` does not cover ModelScope. Each Fun-CosyVoice3 server builds the upstream `CosyVoice3` object to load Flow and HiFT, and its constructor also loads the wetext normalizer from ModelScope. That request runs on every start, even with the files cached. If ModelScope is unreachable or rate limited, `tts_server.log` shows `no frontend is avaliable`. SGLang-Omni never uses that normalizer. It encodes the raw text with its own tokenizer (`sglang_omni/models/fun_cosyvoice3/utils.py`), so the outputs are the same either way and the run stays valid.
+
 ### Write the summary script
 
 `python /work/summary.py DIR` reads `DIR/run1` to `DIR/run3` and prints, for each model and field, the three values, their mean and their sample standard deviation. It also prints a coverage line for each run.
