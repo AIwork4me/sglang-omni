@@ -14,6 +14,8 @@ import time
 
 import torch
 
+from sglang_omni.platforms import current_platform
+
 from .protocol import ABC_END, MUSIC_END, Sampling, SongRequest, token_prefixes
 from .sampling import _decode_loop, synchronize
 
@@ -34,9 +36,13 @@ def generate_song_tokens(model, session, tokenizer, request: SongRequest, *,
     feeds the remainder plus ``MUSIC_END``. The session is left open with the
     full AR KV (prefix + codec + MUSIC_END) resident.
     """
+    # note (AIwork4me): the fused decode+sample graph binds DeepSelect CUDA
+    # kernels, and PyTorch names HIP devices "cuda", so ROCm must be excluded
+    # by platform and run the looped generator below.
     if (cfg_scale == 1.0 and request.cot != "off"
             and os.environ.get("SGLANG_YUE2_STEP_GRAPH", "1") == "1"
-            and session.device.type == "cuda"):
+            and session.device.type == "cuda"
+            and not current_platform.is_rocm()):
         try:
             return _generate_song_tokens_step_graph(
                 model, session, tokenizer, request,

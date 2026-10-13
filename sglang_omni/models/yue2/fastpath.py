@@ -20,6 +20,8 @@ import os
 
 import torch
 
+from sglang_omni.platforms import current_platform
+
 from .protocol import ABC_END, CODEC_OFFSET, CODEC_SIZE, EOD, MUSIC_END
 
 _IN_TREE = None
@@ -67,6 +69,13 @@ def _load_topk_backend():
 
 def fast_sampler_available() -> bool:
     if os.environ.get("SGLANG_YUE2_FAST_SAMPLER", "1") != "1":
+        return False
+    else:
+        pass
+    if current_platform.is_rocm():
+        # note (AIwork4me): torch.cuda.is_available() is also true on ROCm,
+        # but the DeepSelect kernel is CUDA-only; the reference sampler is
+        # the validated path.
         return False
     else:
         pass
