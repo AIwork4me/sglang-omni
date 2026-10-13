@@ -38,6 +38,7 @@ class UsageInfo:
     completion_tokens: int | None = None
     total_tokens: int | None = None
     engine_time_s: float | None = None
+    prompt_tokens_details: dict[str, int] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> "UsageInfo | None":
@@ -48,6 +49,7 @@ class UsageInfo:
             completion_tokens=data.get("completion_tokens"),
             total_tokens=data.get("total_tokens"),
             engine_time_s=data.get("engine_time_s"),
+            prompt_tokens_details=data.get("prompt_tokens_details"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -157,6 +159,7 @@ class GenerateChunk:
     image_b64: str | None = None
     images_b64: list[str] | None = None
     image_usage: ImageUsageDict | None = None
+    text_usage_stage: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

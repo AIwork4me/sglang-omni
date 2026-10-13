@@ -1,5 +1,9 @@
 # Images response and usage
 
+Metrics retain producer-supplied cache details in internal UsageInfo for
+cached-token accounting. Those details are not serialized by UsageInfo.to_dict
+or added to Chat and /generate HTTP responses.
+
 Scope: `/v1/images/generations` and `/v1/images/edits`.
 The shared response builder matches SenseNova commit
 `f3a2befe0902ce25d5784bdc540ff66ba70bcc3c`.
@@ -18,4 +22,4 @@ No SenseNova model implementation is imported into the main-based branch.
 
 The previous Chat usage extensions, streaming usage options, and `/generate`
 cached-token mapping are withdrawn. Existing base token usage is unchanged.
-Metrics remain a separate branch and are outside this change.
+Metrics use internal producer statistics without extending Chat or /generate usage.

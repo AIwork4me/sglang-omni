@@ -46,6 +46,16 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+try:
+    from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+except ModuleNotFoundError as error:
+    if error.name != "prometheus_client":
+        raise
+    else:
+        pass
+else:
+    pass
+
 from sglang_omni import __version__
 from sglang_omni.client import (
     Client,
@@ -79,6 +89,7 @@ from sglang_omni.serve.image_response import (
     ImageGenerationResponse,
     build_image_response,
 )
+from sglang_omni.serve.metrics import MetricsMiddleware, RequestMetrics
 from sglang_omni.serve.openai_errors import (
     is_bad_request_error as _is_bad_request_error,
 )
@@ -210,6 +221,7 @@ def create_app(
     tts_batch_max_items: int = DEFAULT_TTS_BATCH_MAX_ITEMS,
     architectures: list[str] | None = None,
     audio_chunking: ResolvedAudioChunking | None = None,
+    enable_metrics: bool = False,
 ) -> FastAPI:
     """Create a FastAPI application with OpenAI-compatible endpoints.
 
@@ -317,6 +329,24 @@ def create_app(
     register_translations(app)
     if enable_realtime:
         _register_realtime(app)
+
+    if enable_metrics:
+        app.state.request_metrics = RequestMetrics(app.state.model_name)
+        client.request_metrics = app.state.request_metrics
+        if getattr(client, "_coordinator", None) is not None:
+            client._coordinator.request_metrics = app.state.request_metrics
+        app.add_middleware(MetricsMiddleware, metrics=app.state.request_metrics)
+
+        @app.get("/metrics", include_in_schema=False)
+        async def metrics() -> Response:
+            try:
+                await app.state.request_metrics.refresh_scheduler(client)
+            except Exception:
+                return Response("Scheduler metrics unavailable\n", status_code=503)
+            return Response(
+                generate_latest(app.state.request_metrics.registry),
+                headers={"Content-Type": CONTENT_TYPE_LATEST},
+            )
 
     return app
 
