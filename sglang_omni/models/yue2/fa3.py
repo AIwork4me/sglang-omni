@@ -9,8 +9,10 @@ custom mask.
 ``SGLANG_YUE2_FA3=1`` (default) uses the shared op; otherwise it falls back to
 PyTorch's native variable-length FlashAttention. Imports stay lazy so importing
 this never requires ``flash_attn_3``/``sgl_kernel``. On ROCm the shared op is
-skipped entirely: it dispatches to CUDA-only FA3 kernels, while the native
-ATen path is the validated Radeon route.
+skipped for now: today's wrapper dispatches to CUDA-only kernels, while the
+native ATen path is the zero-extra-dependency route validated end-to-end on
+Radeon W7900. A ROCm build of flash-attn 2 would let the shared FA2 path
+replace ATen later without touching call sites (same seqused_k/GQA contract).
 """
 from __future__ import annotations
 
