@@ -34,6 +34,7 @@ class Yue2State(DeclarativeStateBase):
     ode_steps: int = wire(DEFAULT_ODE_STEPS, codec="int")
     vae_core_frames: int = wire(DEFAULT_VAE_CORE_FRAMES, codec="int")
     vae_halo_frames: int = wire(DEFAULT_VAE_HALO_FRAMES, codec="int")
+    artifacts_dir: str | None = wire(None, codec="raw")
     finish_reason: str | None = wire(None, codec="str")
 
 

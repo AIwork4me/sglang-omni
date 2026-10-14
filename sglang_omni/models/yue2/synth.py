@@ -25,6 +25,7 @@ from .protocol import (
 )
 from .runtime import Yue2Runtime
 from .song import generate_song_tokens, song_token_budget
+from .storage import export_song_artifacts
 
 
 def default_vae_dir(model_path: str | Path) -> Path:
@@ -121,6 +122,23 @@ class Yue2Synthesizer:
                 audio[index] = decoded[row]
         return audio
 
+    def export_artifacts(self, state, request, abc_ids, semantic_ids,
+                         semantic_prefix, latents, timing, truncated):
+        """Write the WSB scoring bundle when the request asked for one."""
+        directory = getattr(state, "artifacts_dir", None)
+        if not directory:
+            return
+        export_song_artifacts(
+            directory,
+            request=request,
+            latents=latents,
+            semantic_ids=semantic_ids,
+            prefix_ids=[int(token) for token in semantic_prefix],
+            abc_ids=[int(token) for token in abc_ids],
+            timing=timing,
+            truncated=truncated,
+        )
+
     @torch.inference_mode()
     def synthesize(self, state):
         runtime = self.runtime
@@ -152,6 +170,13 @@ class Yue2Synthesizer:
                     attention="sdpa", offload_ar=False, query_chunk_size=None)
         finally:
             default_session_pool.release(session)
+
+        truncated = bool(_timing["semantic"]["truncated"] or _timing["abc"]["truncated"])
+        self.export_artifacts(
+            state, request, abc_ids,
+            [int(token) - CODEC_OFFSET for token in semantic_ids],
+            semantic_prefix, latents, _timing, truncated,
+        )
 
         state.finish_reason = "stop"
         return self.decode_audio([latents], [state])[0], time.perf_counter() - started
@@ -200,6 +225,13 @@ class Yue2Synthesizer:
                 pass
 
         audio = self.decode_audio(latents_list, states)
+        for index, state in enumerate(states):
+            self.export_artifacts(
+                state, requests[index], items[index].extra.get("yue2_abc_ids") or [],
+                codecs[index], items[index].extra["yue2_semantic_prefix"],
+                latents_list[index], items[index].extra.get("yue2_timing") or {},
+                bool(items[index].extra.get("yue2_truncated")),
+            )
         elapsed = time.perf_counter() - started
         for state in states:
             state.finish_reason = "stop"

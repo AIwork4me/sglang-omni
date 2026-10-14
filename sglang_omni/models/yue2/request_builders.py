@@ -152,6 +152,7 @@ def build_yue2_state(payload: StagePayload) -> Yue2State:
         vae_core_frames = as_int(obj.get("vae_core_frames"), DEFAULT_VAE_CORE_FRAMES)
         vae_halo_frames = as_int(
             obj.get("vae_halo_frames"), DEFAULT_VAE_HALO_FRAMES, minimum=0)
+        artifacts_dir = as_string(obj.get("artifacts_dir"), "") or None
     else:
         style = as_string(tts_params.get("instructions"), DEFAULT_STYLE) or DEFAULT_STYLE
         lyrics = as_string(request.inputs, "")
@@ -181,6 +182,7 @@ def build_yue2_state(payload: StagePayload) -> Yue2State:
         ode_steps=ode_steps,
         vae_core_frames=vae_core_frames,
         vae_halo_frames=vae_halo_frames,
+        artifacts_dir=artifacts_dir,
     )
 
 
