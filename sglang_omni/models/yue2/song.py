@@ -36,9 +36,7 @@ def generate_song_tokens(model, session, tokenizer, request: SongRequest, *,
     feeds the remainder plus ``MUSIC_END``. The session is left open with the
     full AR KV (prefix + codec + MUSIC_END) resident.
     """
-    # note (AIwork4me): the fused decode+sample graph binds DeepSelect CUDA
-    # kernels, and PyTorch names HIP devices "cuda", so ROCm must be excluded
-    # by platform and run the looped generator below.
+    # note (rocm): add fast TopK support
     if (cfg_scale == 1.0 and request.cot != "off"
             and os.environ.get("SGLANG_YUE2_STEP_GRAPH", "1") == "1"
             and session.device.type == "cuda"

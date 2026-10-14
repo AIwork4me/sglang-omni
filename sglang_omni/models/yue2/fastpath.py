@@ -73,9 +73,10 @@ def fast_sampler_available() -> bool:
     else:
         pass
     if current_platform.is_rocm():
-        # note (AIwork4me): torch.cuda.is_available() is also true on ROCm,
-        # but the DeepSelect kernel is CUDA-only; the reference sampler is
-        # the validated path.
+        # note (rocm): add fast TopK support. torch.cuda.is_available() is
+        # also true on HIP, but the DeepSelect JIT is CUDA-only today; the
+        # reference sampler is the validated path. A ROCm-buildable top-k
+        # (e.g. flash-float-jit-kernels) re-enables this once runnable.
         return False
     else:
         pass
