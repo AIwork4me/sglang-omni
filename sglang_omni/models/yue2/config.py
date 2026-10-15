@@ -39,6 +39,9 @@ class Yue2PipelineConfig(PipelineConfig):
 
     architecture: ClassVar[str] = "YuE2ForCausalLM"
     requires_model_capabilities: ClassVar[bool] = True
+    # note (AIwork4me Bench): full-song lyrics legitimately exceed the generic
+    # 4096-char TTS input cap (WSB prompt 164 nested input is 4194 chars).
+    max_speech_input_chars: ClassVar[int | None] = None
 
     stage_config_types: ClassVar[dict[str, type[StageConfig]]] = {
         "yue2_synth": StageConfig,
