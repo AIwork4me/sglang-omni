@@ -28,7 +28,7 @@ class Chunk:
     nar_cond_end: int = 0
 
 
-def _integers(values, name):
+def coerce_integers(values, name):
     result = list(values)
     if not result or any(
         isinstance(v, bool) or not isinstance(v, Integral) for v in result
@@ -41,8 +41,8 @@ def _integers(values, name):
 
 def song_chunks(prefix, codec, seed, context=CONTEXT):
     """Draw the complete noise tensor once, then take views at historical cuts."""
-    prefix = _integers(prefix, "prefix")
-    codec = _integers(codec, "codec")
+    prefix = coerce_integers(prefix, "prefix")
+    codec = coerce_integers(codec, "codec")
     if min(prefix) < 0 or min(codec) < 0 or max(codec) >= CODEC_SIZE:
         raise ValueError("Token IDs are outside their allowed vocabulary")
     else:
@@ -207,9 +207,9 @@ class CachedNAR:
         )
         self.pos_emb = model.latent_pos_embed(local)[None]
         self.cache = []
-        self._prefill()
+        self.prefill()
 
-    def _attention(self, q, k, v, causal=False):
+    def attention(self, q, k, v, causal=False):
         return attention(
             q,
             k,
@@ -220,7 +220,7 @@ class CachedNAR:
         )
 
     @torch.inference_mode()
-    def _prefill(self):
+    def prefill(self):
         backbone = self.model.model
         ids = torch.tensor([self.chunk.ar_tokens], dtype=torch.long, device=self.device)
         positions = torch.arange(self.ar_length, device=self.device)[None]
@@ -236,7 +236,7 @@ class CachedNAR:
             else:
                 pass
             self.cache.append(cached)
-            h = self._attention(q[0], k[0], v[0], causal=True)
+            h = self.attention(q[0], k[0], v[0], causal=True)
             x = x + layer.self_attn.o_proj(h.flatten(1)[None])
             x = x + layer.mlp(layer.post_attention_layernorm(x))
 
@@ -248,7 +248,7 @@ class CachedNAR:
         else:
             pass
         x_nar = F.pad(state, (0, 0, 1, 1))
-        shifted = model._shift_t_value(raw_t, self.device, self.dtype)
+        shifted = model.shift_t_value(raw_t, self.device, self.dtype)
         x = model.vae2llm(x_nar[None])
         x = x + model.time_embedder(shifted.expand(self.nar_length))[None]
         x = x + self.pos_emb
@@ -257,7 +257,7 @@ class CachedNAR:
                 layer.nar_input_layernorm(x), self.cos, self.sin
             )
             k, v = torch.cat((ar_k, k[0])), torch.cat((ar_v, v[0]))
-            h = self._attention(q[0], k, v)
+            h = self.attention(q[0], k, v)
             x = x + layer.nar_self_attn.o_proj(h.flatten(1)[None])
             x = x + layer.nar_mlp(layer.nar_pre_mlp_layernorm(x))
         return model.llm2vae(model.model.norm(x))[0, 1:-1]
@@ -323,7 +323,7 @@ class CachedNAR:
 
 
 @contextmanager
-def _offload_ar(model, enabled):
+def offload_ar_modules(model, enabled):
     """Temporarily move unused AR modules; this model cannot serve concurrently."""
     modules = [model.model.embed_tokens, model.lm_head]
     for layer in model.model.layers:
@@ -394,7 +394,7 @@ def synthesize(
         engine = CachedNAR(model, chunk, attention, query_chunk_size)
         # Drop the prefix cache before restoring AR weights, including on
         # cancellation/failure, to keep the restoration memory peak bounded.
-        with _offload_ar(model, offload_ar):
+        with offload_ar_modules(model, offload_ar):
             try:
                 progress = None
                 if on_progress is not None:

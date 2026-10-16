@@ -26,7 +26,7 @@ Registration is automatic (registry scans `models/*/config.py` for `EntryClass`)
 `YuE2ForCausalLM` also added to `tests/unit_test/models/test_model_capabilities.py`.
 
 ## Two adaptations for portability
-- `fastpath.py`: `_TorchTopKBackend` fallback when DeepSelect is absent
+- `fastpath.py`: `TorchTopKBackend` fallback when DeepSelect is absent
   (SGLang-Omni env has no `sglang.kernels`). DeepSelect still preferred.
 - `fa3.py`: falls back to ATen when the in-tree FA3 varlen op is absent.
 

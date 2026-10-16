@@ -19,11 +19,11 @@ from sglang_omni.platforms import current_platform
 from .fastpath import (
     FastSampler,
     GraphSampler,
-    _load_topk_backend,
     fast_sampler_available,
+    load_topk_backend,
 )
 from .protocol import ABC_END, MUSIC_END, Sampling, SongRequest, token_prefixes
-from .sampling import _decode_loop, synchronize
+from .sampling import decode_loop, synchronize
 
 
 @torch.inference_mode()
@@ -57,7 +57,7 @@ def generate_song_tokens(
         and not current_platform.is_rocm()
     ):
         try:
-            return _generate_song_tokens_step_graph(
+            return generate_song_tokens_step_graph(
                 model,
                 session,
                 tokenizer,
@@ -67,12 +67,12 @@ def generate_song_tokens(
                 cancelled=cancelled,
                 on_token=on_token,
             )
-        except _StepGraphUnavailable:
+        except StepGraphUnavailable:
             pass
     else:
         pass
 
-    return _generate_song_tokens_looped(
+    return generate_song_tokens_looped(
         model,
         session,
         tokenizer,
@@ -98,11 +98,11 @@ def song_token_budget(abc_sampling: Sampling, semantic_sampling: Sampling) -> in
     return int(abc_sampling.max_tokens) + int(semantic_sampling.max_tokens) + 4
 
 
-class _StepGraphUnavailable(Exception):
+class StepGraphUnavailable(Exception):
     pass
 
 
-def _generate_song_tokens_step_graph(
+def generate_song_tokens_step_graph(
     model,
     session,
     tokenizer,
@@ -120,8 +120,8 @@ def _generate_song_tokens_step_graph(
     single-entry masks, so the whole song runs end-to-end without per-step
     CPU sampling work.
     """
-    if _load_topk_backend() is None:
-        raise _StepGraphUnavailable("DeepSelect backend missing")
+    if load_topk_backend() is None:
+        raise StepGraphUnavailable("DeepSelect backend missing")
     else:
         pass
 
@@ -137,7 +137,7 @@ def _generate_song_tokens_step_graph(
             torch.Generator(device=device).manual_seed(request.seed),
         )
         if session.graph is not None and not session.step_mode:
-            raise _StepGraphUnavailable("session already captured without a sampler")
+            raise StepGraphUnavailable("session already captured without a sampler")
         else:
             pass
         session.sampler = sampler
@@ -300,7 +300,7 @@ def _generate_song_tokens_step_graph(
     return abc_ids, codec_ids, timing, fed_codec
 
 
-def _generate_song_tokens_looped(
+def generate_song_tokens_looped(
     model,
     session,
     tokenizer,
@@ -365,7 +365,7 @@ def _generate_song_tokens_looped(
     else:
         legacy_semantic = False
         # Phase 1: ABC planning tokens (no CFG; both branches share the tokens).
-        abc_ids, abc_timing, abc_open, fed_abc = _decode_loop(
+        abc_ids, abc_timing, abc_open, fed_abc = decode_loop(
             step_fn=step_fn,
             logits_pair=branch(logits),
             sampling=abc_sampling,
@@ -403,7 +403,7 @@ def _generate_song_tokens_looped(
             )
         transition_seconds = time.perf_counter() - transition_start
 
-    codec_ids, semantic_timing, semantic_open, fed_codec = _decode_loop(
+    codec_ids, semantic_timing, semantic_open, fed_codec = decode_loop(
         step_fn=step_fn,
         logits_pair=logits_pair,
         sampling=semantic_sampling,

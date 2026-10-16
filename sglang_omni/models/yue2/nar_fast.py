@@ -19,7 +19,7 @@ from .protocol import MUSIC_END, chunk_ranges
 _SGL_KERNEL = None
 
 
-def _sgl_kernel():
+def load_sgl_kernel():
     """Load sgl_kernel once; returns None when unavailable.
 
     `import sgl_kernel` transitively imports flashinfer, whose cubin version
@@ -41,7 +41,7 @@ def _sgl_kernel():
 
 def model_fused_nar_weights(model):
     """Persistent fused QKV / gate-up weights for the NAR expert, cached on the model."""
-    cached = getattr(model, "_yue2_fused_nar_weights", None)
+    cached = getattr(model, "yue2_fused_nar_weights", None)
     if cached is None:
         layers = []
         for layer in model.model.layers:
@@ -57,14 +57,14 @@ def model_fused_nar_weights(model):
                 [layer.nar_mlp.gate_proj.weight, layer.nar_mlp.up_proj.weight], dim=0
             ).contiguous()
             layers.append((qkv, gate_up))
-        model._yue2_fused_nar_weights = layers
+        model.yue2_fused_nar_weights = layers
         cached = layers
     else:
         pass
     return cached
 
 
-def _flash_varlen(q, k, v, cu_q, cu_k, max_q, max_k):
+def flash_varlen(q, k, v, cu_q, cu_k, max_q, max_k):
     return varlen_attention(q, k, v, cu_q, cu_k, max_q, max_k)
 
 
@@ -72,7 +72,7 @@ class SessionNAR:
     """Velocity evaluations for one original acoustic chunk on borrowed AR KV."""
 
     def __init__(self, model, session, ar_length, noise, branch=0):
-        kernel = _sgl_kernel()
+        kernel = load_sgl_kernel()
         if kernel is None:
             # NAR stage treats ValueError as "fall back to the reference
             # implementation" — degrade gracefully instead of failing the
@@ -154,7 +154,7 @@ class SessionNAR:
         x_nar = F.pad(state, (0, 0, 1, 1))
 
         if shifted is None:
-            shifted = model._shift_t_value(raw_t, self.device, self.dtype)
+            shifted = model.shift_t_value(raw_t, self.device, self.dtype)
         else:
             pass
 
@@ -197,7 +197,7 @@ class SessionNAR:
             keys[0, self.ar_length :] = k
             values[0, self.ar_length :] = v
 
-            h = _flash_varlen(
+            h = flash_varlen(
                 q,
                 keys[0],
                 values[0],
@@ -273,7 +273,7 @@ class BatchedSessionNAR:
     """
 
     def __init__(self, model, session, branches, ar_lengths, noise_list):
-        kernel = _sgl_kernel()
+        kernel = load_sgl_kernel()
         if kernel is None:
             raise ValueError("sgl_kernel is unavailable; falling back to reference NAR")
         else:
@@ -360,7 +360,7 @@ class BatchedSessionNAR:
         HD = self.HD
         HQ, HKV, eps = self.HQ, self.HKV, self.eps
         x_nar = torch.cat([F.pad(state, (0, 0, 1, 1)) for state in states], dim=0)
-        shifted = model._shift_t_value(raw_t, self.device, self.dtype)
+        shifted = model.shift_t_value(raw_t, self.device, self.dtype)
 
         residual = model.vae2llm(x_nar)
         residual = residual + model.time_embedder(shifted.expand(self.sum_nar))
@@ -400,7 +400,7 @@ class BatchedSessionNAR:
                 keys[start : start + length] = k[qo : qo + length]
                 values[start : start + length] = v[qo : qo + length]
 
-            h = _flash_varlen(
+            h = flash_varlen(
                 q, keys, values, self.cu_q, self.cu_k, self.max_nar, self.max_total
             )
             attn = layer.nar_self_attn.o_proj(h.reshape(self.sum_nar, HQ * HD))
@@ -472,7 +472,7 @@ def synthesize_batched(model, session, branches, prefix_lens, codecs, seeds, ste
     return BatchedSessionNAR(model, session, branches, ar_lengths, noises).solve(steps)
 
 
-class _VelocityGraph(SessionNAR):
+class VelocityGraph(SessionNAR):
     """SessionNAR whose ``velocity`` is a captured CUDA graph replay.
 
     The ODE state and the shifted timestep are graph input buffers, so a
@@ -489,13 +489,13 @@ class _VelocityGraph(SessionNAR):
         warmup.wait_stream(torch.cuda.current_stream(self.device))
         with torch.cuda.stream(warmup):
             for _ in range(2):
-                self._velocity_impl(self.state_buf)
+                self.velocity_impl(self.state_buf)
         torch.cuda.current_stream(self.device).wait_stream(warmup)
         torch.cuda.synchronize(self.device)
 
         self.graph = torch.cuda.CUDAGraph()
         with torch.cuda.graph(self.graph):
-            self.output_buf = self._velocity_impl(self.state_buf)
+            self.output_buf = self.velocity_impl(self.state_buf)
 
     def load(self, session, ar_length, noise, branch=0):
         """Refresh the borrowed AR KV and the noise buffer for a new request."""
@@ -516,14 +516,12 @@ class _VelocityGraph(SessionNAR):
     @torch.inference_mode()
     def velocity(self, state, raw_t, shifted=None):
         self.state_buf.copy_(state)
-        self.shifted_buf.copy_(
-            self.model._shift_t_value(raw_t, self.device, self.dtype)
-        )
+        self.shifted_buf.copy_(self.model.shift_t_value(raw_t, self.device, self.dtype))
         self.graph.replay()
         return self.output_buf
 
     @torch.inference_mode()
-    def _velocity_impl(self, state):
+    def velocity_impl(self, state):
         return super().velocity(state, None, self.shifted_buf)
 
 
@@ -532,16 +530,16 @@ class VelocityGraphPool:
 
     def __init__(self, max_shapes: int = 8):
         self.max_shapes = int(max_shapes)
-        self._graphs: dict[tuple[int, int], _VelocityGraph] = {}
-        self._lock = threading.Lock()
+        self.graphs: dict[tuple[int, int], VelocityGraph] = {}
+        self.lock = threading.Lock()
 
     def acquire(self, model, session, ar_length, noise, branch=0):
         key = (int(ar_length), int(noise.shape[0]))
-        with self._lock:
-            graph = self._graphs.get(key)
-            if graph is None and len(self._graphs) < self.max_shapes:
-                graph = _VelocityGraph(model, session, ar_length, noise, branch=branch)
-                self._graphs[key] = graph
+        with self.lock:
+            graph = self.graphs.get(key)
+            if graph is None and len(self.graphs) < self.max_shapes:
+                graph = VelocityGraph(model, session, ar_length, noise, branch=branch)
+                self.graphs[key] = graph
                 return graph
             else:
                 pass
@@ -553,8 +551,8 @@ class VelocityGraphPool:
         return SessionNAR(model, session, ar_length, noise, branch=branch)
 
     def stats(self) -> dict:
-        with self._lock:
-            return {"shapes": sorted(self._graphs.keys())}
+        with self.lock:
+            return {"shapes": sorted(self.graphs.keys())}
 
 
 default_velocity_pool = VelocityGraphPool()
@@ -621,7 +619,7 @@ def synthesize_from_session(
     try:
         return engine.solve(steps)
     finally:
-        if isinstance(engine, SessionNAR) and not isinstance(engine, _VelocityGraph):
+        if isinstance(engine, SessionNAR) and not isinstance(engine, VelocityGraph):
             engine.keys = engine.values = None
         else:
             pass

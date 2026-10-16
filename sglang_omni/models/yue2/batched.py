@@ -54,18 +54,18 @@ class BatchedSessionLease:
     def __init__(self, session, refs: int, pool=default_batched_pool):
         self.session = session
         self.pool = pool
-        self._refs = int(refs)
-        self._released = False
-        self._lock = threading.Lock()
+        self.refs = int(refs)
+        self.released = False
+        self.lock = threading.Lock()
 
     def release(self) -> None:
-        with self._lock:
-            self._refs -= 1
-            if self._refs > 0 or self._released:
+        with self.lock:
+            self.refs -= 1
+            if self.refs > 0 or self.released:
                 return
             else:
                 pass
-            self._released = True
+            self.released = True
         self.pool.release(self.session)
 
 
@@ -115,7 +115,7 @@ def generate_semantic_batched(
         session.step_mode = True
     else:
         sampler.generator.manual_seed(int(seed))
-        if sampler._k < max(1, int(semantic_sampling.top_k)):
+        if sampler.k < max(1, int(semantic_sampling.top_k)):
             raise RuntimeError("pooled batched sampler top-k budget exceeded")
         else:
             pass
@@ -315,7 +315,7 @@ def generate_abc_batched(
     return abc, truncated
 
 
-def _abc_per_request(model, tokenizer, requests, configs, batches):
+def abc_per_request(model, tokenizer, requests, configs, batches):
     """Per-request ABC fallback (looped path) used when batched ABC fails."""
     abc_ids_list, abc_truncated_list = [], []
     for request, config, batch in zip(requests, configs, batches):
@@ -406,7 +406,7 @@ def run_batched_ar(model, tokenizer, batches, generation_config):
             default_batched_pool.release(abc_session)
     except Exception:
         _logger.exception("Batched ABC failed; falling back to per-request ABC")
-        abc_ids_list, abc_truncated_list = _abc_per_request(
+        abc_ids_list, abc_truncated_list = abc_per_request(
             model, tokenizer, requests, configs, batches
         )
     abc_seconds = time.perf_counter() - abc_started
