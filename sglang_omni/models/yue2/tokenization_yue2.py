@@ -40,7 +40,7 @@ class YuE2TextTokenizer:
         specials += [f"<extra_{i}>" for i in range(200)]
         specials[204:206] = ["<abc>", "</abc>"]
         pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+"
-        self._enc = tiktoken.Encoding(
+        self.enc = tiktoken.Encoding(
             "YuE2",
             pat_str=pattern,
             mergeable_ranks=ranks,
@@ -48,11 +48,11 @@ class YuE2TextTokenizer:
         )
 
     def encode(self, text):
-        return self._enc.encode_ordinary(unicodedata.normalize("NFC", text))
+        return self.enc.encode_ordinary(unicodedata.normalize("NFC", text))
 
     def decode(self, ids):
-        return self._enc.decode(
-            [int(i) for i in ids if 0 <= i < self._enc.n_vocab], errors="replace"
+        return self.enc.decode(
+            [int(i) for i in ids if 0 <= i < self.enc.n_vocab], errors="replace"
         )
 
     @classmethod

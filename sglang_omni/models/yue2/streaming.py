@@ -38,7 +38,7 @@ class StreamingConfig:
     vae_halo_frames: int = 16
 
 
-def _windows(total: int, window: int, overlap: int) -> list[tuple[int, int]]:
+def windows(total: int, window: int, overlap: int) -> list[tuple[int, int]]:
     if total <= 0:
         return []
     else:
@@ -82,7 +82,7 @@ def stream_audio(
         return
     else:
         pass
-    for start, end in _windows(len(codec), config.codec_window, config.codec_overlap):
+    for start, end in windows(len(codec), config.codec_window, config.codec_overlap):
         local_codec = codec[start:end]
         chunk = Chunk(
             ar_tokens=prefix

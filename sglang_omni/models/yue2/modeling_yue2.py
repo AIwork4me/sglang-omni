@@ -48,7 +48,7 @@ def sdpa(query, key, value, *, attn_mask=None, is_causal=False):
     )
 
 
-def _causal_mask(attention_mask, cache_position, key_length, batch_size):
+def build_causal_mask(attention_mask, cache_position, key_length, batch_size):
     """Physical cache slots are causal; RoPE positions may exclude padding."""
     device = cache_position.device
     visible = (
@@ -92,7 +92,7 @@ def _causal_mask(attention_mask, cache_position, key_length, batch_size):
 class YuE2Config(PretrainedConfig):
     model_type = "yue2"
 
-    _hf_fields = frozenset(
+    hf_fields = frozenset(
         {
             "model_type",
             "architectures",
@@ -121,10 +121,10 @@ class YuE2Config(PretrainedConfig):
         return {
             key: value
             for key, value in super().to_dict().items()
-            if key in self._hf_fields or key in self._inference_fields
+            if key in self.hf_fields or key in self.inference_fields
         }
 
-    _inference_fields = frozenset(
+    inference_fields = frozenset(
         [
             "hidden_size",
             "num_hidden_layers",
@@ -170,7 +170,7 @@ class YuE2Config(PretrainedConfig):
             pass
 
         # Serialize only the documented model and Transformers configuration.
-        kwargs = {key: value for key, value in kwargs.items() if key in self._hf_fields}
+        kwargs = {key: value for key, value in kwargs.items() if key in self.hf_fields}
 
         super().__init__(tie_word_embeddings=tie_word_embeddings, **kwargs)
 
@@ -216,11 +216,11 @@ class RotaryEmbedding(nn.Module):
         super().__init__()
         self.head_dim = head_dim
         self.base = base
-        self._inv_freq: Optional[torch.Tensor] = None
+        self.inv_freq: Optional[torch.Tensor] = None
 
     def forward(self, position_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self._inv_freq is None or self._inv_freq.device != position_ids.device:
-            self._inv_freq = 1.0 / (
+        if self.inv_freq is None or self.inv_freq.device != position_ids.device:
+            self.inv_freq = 1.0 / (
                 self.base
                 ** (
                     torch.arange(
@@ -236,13 +236,11 @@ class RotaryEmbedding(nn.Module):
         else:
             pass
         pos = position_ids.float().unsqueeze(-1)
-        angles = pos * self._inv_freq
+        angles = pos * self.inv_freq
         return angles.cos(), angles.sin()
 
 
-def _apply_rotary(
-    x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
-) -> torch.Tensor:
+def apply_rotary(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     half = x.shape[-1] // 2
     x1, x2 = x[..., :half], x[..., half:]
     cos, sin = cos.to(x.dtype), sin.to(x.dtype)
@@ -288,8 +286,8 @@ class Attention(nn.Module):
         v = self.v_proj(x).view(B, T, self.num_kv_heads, self.head_dim)
         q, k = self.q_norm(q), self.k_norm(k)
         rc, rs = cos.unsqueeze(2), sin.unsqueeze(2)
-        q = _apply_rotary(q, rc, rs)
-        k = _apply_rotary(k, rc, rs)
+        q = apply_rotary(q, rc, rs)
+        k = apply_rotary(k, rc, rs)
         return q, k, v
 
     def forward(
@@ -499,7 +497,7 @@ class StaticKVCache:
     ):
         self.num_layers = num_layers
         self.max_seq_len = max_seq_len
-        self._seen_tokens = 0
+        self.seen_tokens = 0
         self.key_cache: List[torch.Tensor] = [
             torch.zeros(
                 batch_size,
@@ -524,11 +522,11 @@ class StaticKVCache:
         ]
 
     def get_seq_length(self, layer_idx=0) -> int:
-        return self._seen_tokens
+        return self.seen_tokens
 
     def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
         T = key_states.shape[2]
-        pos = self._seen_tokens
+        pos = self.seen_tokens
         end = pos + T
         if end > self.max_seq_len:
             raise ValueError(
@@ -539,7 +537,7 @@ class StaticKVCache:
         self.key_cache[layer_idx][:, :, pos:end] = key_states
         self.value_cache[layer_idx][:, :, pos:end] = value_states
         if layer_idx == self.num_layers - 1:
-            self._seen_tokens = end
+            self.seen_tokens = end
         else:
             pass
         return (
@@ -548,7 +546,7 @@ class StaticKVCache:
         )
 
     def reset(self):
-        self._seen_tokens = 0
+        self.seen_tokens = 0
 
     def reorder_cache(self, beam_idx):
         self.key_cache = [
@@ -620,7 +618,9 @@ class YuE2PreTrainedModel(PreTrainedModel):
     _no_split_modules = ["DecoderLayer"]
     _supports_sdpa = True
 
-    def _init_weights(self, module):
+    def _init_weights(
+        self, module
+    ):  # noqa: leading-underscore  # transformers PreTrainedModel init hook
         if isinstance(module, nn.Linear):
             nn.init.normal_(module.weight, std=0.01)
             if module.bias is not None:
@@ -749,7 +749,7 @@ class YuE2ForCausalLM(YuE2PreTrainedModel, GenerationMixin):
             or (past_len > 0 and seq_len > 1)
         )
         causal_mask = (
-            _causal_mask(attention_mask, cache_position, key_length, batch_size)
+            build_causal_mask(attention_mask, cache_position, key_length, batch_size)
             if needs_mask
             else None
         )
@@ -860,7 +860,7 @@ class YuE2ForCausalLM(YuE2PreTrainedModel, GenerationMixin):
 
     # ── NAR velocity (flow matching, no KV cache) ────────────────────
 
-    def _shift_t_value(
+    def shift_t_value(
         self, t_value: float, device: torch.device, dtype: torch.dtype
     ) -> torch.Tensor:
         t_sig = torch.sigmoid(torch.tensor(t_value, dtype=dtype, device=device))
@@ -902,7 +902,7 @@ class YuE2ForCausalLM(YuE2PreTrainedModel, GenerationMixin):
         # Training injects vae2llm(x_t) + time_emb + pos_emb at ALL NAR positions,
         # including LATENT_START (clean=0) and LATENT_END (clean=0).
         # NAR position IDs via cumsum: START=0, content=[1..T_lat], END=T_lat+1.
-        t_shifted = self._shift_t_value(t_value, device, dtype)
+        t_shifted = self.shift_t_value(t_value, device, dtype)
         T_lat = x_t.shape[0]
 
         nar_indices = nar_mask[0].nonzero(as_tuple=True)[0]  # all NAR positions

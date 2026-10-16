@@ -28,7 +28,7 @@ _IN_TREE = None
 _PIP = None
 
 
-class _TorchTopKBackend:
+class TorchTopKBackend:
     """Last-resort TopK when DeepSelect is unavailable (portability fallback)."""
 
     @staticmethod
@@ -40,11 +40,11 @@ class _TorchTopKBackend:
         return (values, indices) if return_value else (None, indices)
 
 
-_TORCH = _TorchTopKBackend()
+_TORCH = TorchTopKBackend()
 
 
 # NOTE (yiakwy) : deepseek-select is slightly fast than extended flash-float-jit-kernel in this workload
-def _load_topk_backend():
+def load_topk_backend():
     """Prefer the in-tree JIT DeepSelect wrapper, then the pip package, then torch."""
     global _IN_TREE, _PIP
     if _IN_TREE is None:
@@ -81,7 +81,7 @@ def fast_sampler_available() -> bool:
         return False
     else:
         pass
-    backend = _load_topk_backend()
+    backend = load_topk_backend()
     if not backend:
         return False
     else:
@@ -99,7 +99,7 @@ class FastSampler:
     """Reused per-model state for the accelerated decode loop."""
 
     def __init__(self, vocab_size: int, device: torch.device):
-        topk_backend = _load_topk_backend()
+        topk_backend = load_topk_backend()
         if not topk_backend:
             raise ImportError(
                 "DeepSelect/flash-float-jit-kernel are required for the fast sampler."
@@ -115,11 +115,11 @@ class FastSampler:
         self.total = self.vocab + self.pad
         self.scores = torch.empty(1, self.total, dtype=torch.float32, device=device)
         self.scores[0, self.vocab :] = float("-inf")
-        self._masks: dict[str, torch.Tensor] = {}
-        self._ends: dict[str, int] = {}
+        self.masks: dict[str, torch.Tensor] = {}
+        self.ends: dict[str, int] = {}
 
-    def _phase_mask(self, phase: str) -> torch.Tensor:
-        mask = self._masks.get(phase)
+    def phase_mask(self, phase: str) -> torch.Tensor:
+        mask = self.masks.get(phase)
         if mask is None:
             row = torch.full(
                 (self.total,), float("-inf"), device=self.device, dtype=torch.float32
@@ -134,15 +134,15 @@ class FastSampler:
                 end = MUSIC_END
             row[self.vocab :] = float("-inf")
             mask = row.unsqueeze(0)
-            self._masks[phase] = mask
-            self._ends[phase] = end
+            self.masks[phase] = mask
+            self.ends[phase] = end
         else:
             pass
         return mask
 
     def allowed_end(self, phase: str) -> int:
-        self._phase_mask(phase)
-        return self._ends[phase]
+        self.phase_mask(phase)
+        return self.ends[phase]
 
     @torch.inference_mode()
     def sample_token(
@@ -161,15 +161,15 @@ class FastSampler:
         generator: torch.Generator,
     ) -> torch.Tensor:
         """Return the next token as a GPU ``[1, 1]`` int64 tensor."""
-        mask = self._phase_mask(phase)
-        end = self._ends[phase]
+        mask = self.phase_mask(phase)
+        end = self.ends[phase]
         torch.add(logits, mask[:, : self.vocab], out=self.scores[:, : self.vocab])
         if step < min_tokens:
             self.scores[0, end] = float("-inf")
         else:
             pass
         if repetition_penalty != 1.0 and history_len > 0:
-            _window_penalty_(
+            window_penalty_inplace(
                 self.scores[:, : self.vocab],
                 history[:history_len],
                 repetition_penalty,
@@ -213,7 +213,7 @@ class GraphSampler:
     def __init__(
         self, vocab_size: int, device: torch.device, generator: torch.Generator
     ):
-        topk_backend = _load_topk_backend()
+        topk_backend = load_topk_backend()
 
         if not topk_backend:
             raise ImportError("GraphSampler requires the DeepSelect backend")
@@ -270,25 +270,23 @@ class GraphSampler:
 
         self.done_buf = torch.zeros(1, 1, dtype=torch.bool, device=device)
 
-        self._ages = torch.empty(self.window_buf_cap, dtype=torch.int32, device=device)
+        self.ages = torch.empty(self.window_buf_cap, dtype=torch.int32, device=device)
 
-        self._window_weights = torch.ones(
+        self.window_weights = torch.ones(
             self.window_buf_cap, dtype=torch.float32, device=device
         )
 
-        self._topk_ranks = torch.arange(
-            MAX_GRAPH_TOPK, device=device, dtype=torch.int32
-        )
+        self.topk_ranks = torch.arange(MAX_GRAPH_TOPK, device=device, dtype=torch.int32)
 
-        self._freq = torch.zeros(self.total, dtype=torch.float32, device=device)
+        self.freq = torch.zeros(self.total, dtype=torch.float32, device=device)
 
-        self._ones_w = torch.ones(
+        self.ones_w = torch.ones(
             self.window_buf_cap, dtype=torch.float32, device=device
         )
 
         self.generator = generator
 
-        self._k = MAX_GRAPH_TOPK
+        self.k = MAX_GRAPH_TOPK
 
         # Output buffers allocated during capture.
         self.values_buf = None
@@ -350,22 +348,22 @@ class GraphSampler:
         else:
             pass
         torch.add(logits, self.mask[:, : self.vocab], out=self.scores[:, : self.vocab])
-        self._freq.zero_()
-        torch.sub(self.step_buf, self.slot_seq, out=self._ages)
-        self._window_weights.copy_(self._ages <= self.window_len_buf)
-        self._freq.scatter_add_(0, self.window_buf, self._window_weights)
-        alpha = self.penalty_buf**self._freq
+        self.freq.zero_()
+        torch.sub(self.step_buf, self.slot_seq, out=self.ages)
+        self.window_weights.copy_(self.ages <= self.window_len_buf)
+        self.freq.scatter_add_(0, self.window_buf, self.window_weights)
+        alpha = self.penalty_buf**self.freq
         scores = torch.where(self.scores < 0, self.scores * alpha, self.scores / alpha)
         scores.div_(self.temp_buf)
 
         values, idx = self.backend.topk(
-            scores, self._k, sorted=True, indices_type=torch.int64, return_value=True
+            scores, self.k, sorted=True, indices_type=torch.int64, return_value=True
         )
 
         self.values_buf, self.idx_buf = values, idx
         probabilities = values.softmax(-1)
         removed = probabilities.cumsum(-1) - probabilities > self.top_p_buf
-        removed = removed | (self._topk_ranks >= self.topk_buf)
+        removed = removed | (self.topk_ranks >= self.topk_buf)
         removed[..., :1] = False
         p = values.masked_fill(removed, float("-inf")).softmax(-1)
         position = torch.multinomial(p, 1, generator=self.generator)
@@ -407,7 +405,7 @@ class BatchedGraphSampler:
         window_buf_cap=100,
         max_topk=MAX_GRAPH_TOPK,
     ):
-        topk_backend = _load_topk_backend()
+        topk_backend = load_topk_backend()
         if not topk_backend:
             raise ImportError("BatchedGraphSampler requires the DeepSelect backend")
         else:
@@ -462,30 +460,28 @@ class BatchedGraphSampler:
         )
         self.stop_step = torch.full((self.B,), -1, dtype=torch.int32, device=device)
 
-        self._end_only = torch.full(
+        self.end_only = torch.full(
             (self.B, self.total), float("-inf"), dtype=torch.float32, device=device
         )
-        self._end_only[:, MUSIC_END] = 0.0
+        self.end_only[:, MUSIC_END] = 0.0
 
-        self._ages = torch.empty(
+        self.ages = torch.empty(
             self.B, self.window_buf_cap, dtype=torch.int32, device=device
         )
-        self._window_weights = torch.ones(
+        self.window_weights = torch.ones(
             self.B, self.window_buf_cap, dtype=torch.float32, device=device
         )
-        self._topk_ranks = torch.arange(max_topk, device=device, dtype=torch.int32)
-        self._freq = torch.zeros(self.B, self.total, dtype=torch.float32, device=device)
-        self._mixed = torch.empty(
-            self.B, self.total, dtype=torch.float32, device=device
-        )
-        self._rows = torch.arange(self.B, device=device)
+        self.topk_ranks = torch.arange(max_topk, device=device, dtype=torch.int32)
+        self.freq = torch.zeros(self.B, self.total, dtype=torch.float32, device=device)
+        self.mixed = torch.empty(self.B, self.total, dtype=torch.float32, device=device)
+        self.rows = torch.arange(self.B, device=device)
 
         self.generator = generator
-        self._k = int(max_topk)
+        self.k = int(max_topk)
         self.values_buf = None
         self.idx_buf = None
 
-    def _fill_scalars(
+    def fill_scalars(
         self,
         temperature,
         top_p,
@@ -497,12 +493,12 @@ class BatchedGraphSampler:
     ):
         self.temp_buf.fill_(max(float(temperature), 1e-5))
         self.top_p_buf.fill_(float(top_p))
-        self.topk_buf.fill_(int(min(max(top_k, 1), self._k)))
+        self.topk_buf.fill_(int(min(max(top_k, 1), self.k)))
         self.penalty_buf.fill_(float(repetition_penalty))
         self.window_len_buf.fill_(int(penalty_window))
         self.end_buf.fill_(int(end))
-        self._end_only.fill_(float("-inf"))
-        self._end_only[:, int(end)] = 0.0
+        self.end_only.fill_(float("-inf"))
+        self.end_only[:, int(end)] = 0.0
         self.block_end(bool(min_tokens))
         self.reset_state()
 
@@ -518,7 +514,7 @@ class BatchedGraphSampler:
         min_tokens,
     ):
         """Refill the per-row semantic-phase input buffers (outside the graph)."""
-        self._fill_scalars(
+        self.fill_scalars(
             temperature,
             top_p,
             top_k,
@@ -543,7 +539,7 @@ class BatchedGraphSampler:
         min_tokens,
     ):
         """Refill the per-row ABC-planning-phase input buffers."""
-        self._fill_scalars(
+        self.fill_scalars(
             temperature,
             top_p,
             top_k,
@@ -575,22 +571,22 @@ class BatchedGraphSampler:
         # Finished rows re-emit the end token, keeping it at the exact KV slot
         # the NAR stage reads, without any host-side branch control.
         forced = (self.stop_step >= 0)[:, None]
-        torch.where(forced, self._end_only, self.scores, out=self._mixed)
-        self._freq.zero_()
-        torch.sub(self.step_buf[:, None], self.slot_seq, out=self._ages)
-        self._window_weights.copy_(self._ages <= self.window_len_buf[:, None])
-        self._freq.scatter_add_(1, self.window_buf, self._window_weights)
-        alpha = self.penalty_buf[:, None] ** self._freq
-        scores = torch.where(self._mixed < 0, self._mixed * alpha, self._mixed / alpha)
+        torch.where(forced, self.end_only, self.scores, out=self.mixed)
+        self.freq.zero_()
+        torch.sub(self.step_buf[:, None], self.slot_seq, out=self.ages)
+        self.window_weights.copy_(self.ages <= self.window_len_buf[:, None])
+        self.freq.scatter_add_(1, self.window_buf, self.window_weights)
+        alpha = self.penalty_buf[:, None] ** self.freq
+        scores = torch.where(self.mixed < 0, self.mixed * alpha, self.mixed / alpha)
         scores.div_(self.temp_buf[:, None])
 
         values, idx = self.backend.topk(
-            scores, self._k, sorted=True, indices_type=torch.int64, return_value=True
+            scores, self.k, sorted=True, indices_type=torch.int64, return_value=True
         )
         self.values_buf, self.idx_buf = values, idx
         probabilities = values.softmax(-1)
         removed = probabilities.cumsum(-1) - probabilities > self.top_p_buf[:, None]
-        removed = removed | (self._topk_ranks[None, :] >= self.topk_buf[:, None])
+        removed = removed | (self.topk_ranks[None, :] >= self.topk_buf[:, None])
         removed[..., :1] = False
         p = values.masked_fill(removed, float("-inf")).softmax(-1)
         position = torch.multinomial(p, 1, generator=self.generator)
@@ -601,17 +597,17 @@ class BatchedGraphSampler:
     def advance_in_graph(self):
         """Ring-buffer bookkeeping and transcript latching for all rows."""
         slot = self.step_buf % self.window_buf_cap
-        self.window_buf[self._rows, slot] = self.token_buf[:, 0]
-        self.slot_seq[self._rows, slot] = self.step_buf
+        self.window_buf[self.rows, slot] = self.token_buf[:, 0]
+        self.slot_seq[self.rows, slot] = self.step_buf
         index = self.step_buf.long()
-        self.token_history[self._rows, index] = self.token_buf[:, 0].to(torch.int32)
+        self.token_history[self.rows, index] = self.token_buf[:, 0].to(torch.int32)
         is_end = self.token_buf[:, 0] == self.end_buf[:, 0]
         newly_stopped = is_end & (self.stop_step < 0)
         torch.where(newly_stopped, self.step_buf, self.stop_step, out=self.stop_step)
         self.step_buf += 1
 
 
-def _window_penalty_(
+def window_penalty_inplace(
     scores: torch.Tensor, recent: torch.Tensor, penalty: float, window: int
 ) -> None:
     """In-place version of ``sampling.window_penalty`` on the scores row."""

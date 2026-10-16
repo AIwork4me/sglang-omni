@@ -102,8 +102,8 @@ def run_song(
     def fake_looped(*args, **kwargs):
         return looped_result
 
-    monkeypatch.setattr(song, "_generate_song_tokens_step_graph", fake_step_graph)
-    monkeypatch.setattr(song, "_generate_song_tokens_looped", fake_looped)
+    monkeypatch.setattr(song, "generate_song_tokens_step_graph", fake_step_graph)
+    monkeypatch.setattr(song, "generate_song_tokens_looped", fake_looped)
     request = SimpleNamespace(cot="full", seed=7, abc=None)
     session = SimpleNamespace(device=torch.device("cuda"))
     return song.generate_song_tokens(

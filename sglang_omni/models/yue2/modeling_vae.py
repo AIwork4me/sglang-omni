@@ -294,7 +294,7 @@ class YuE2VAEConfig(PretrainedConfig):
 
     model_type = "yue2_vae"
 
-    _hf_fields = frozenset(
+    hf_fields = frozenset(
         {
             "model_type",
             "architectures",
@@ -323,10 +323,10 @@ class YuE2VAEConfig(PretrainedConfig):
         return {
             key: value
             for key, value in super().to_dict().items()
-            if key in self._hf_fields or key in self._inference_fields
+            if key in self.hf_fields or key in self.inference_fields
         }
 
-    _inference_fields = frozenset(
+    inference_fields = frozenset(
         [
             "encoder_config",
             "decoder_config",
@@ -353,7 +353,7 @@ class YuE2VAEConfig(PretrainedConfig):
         decode_halo_frames=16,
         **kwargs,
     ):
-        kwargs = {key: value for key, value in kwargs.items() if key in self._hf_fields}
+        kwargs = {key: value for key, value in kwargs.items() if key in self.hf_fields}
         kwargs.setdefault("architectures", ["YuE2VAE"])
         kwargs.setdefault(
             "auto_map",
@@ -435,17 +435,17 @@ class YuE2VAEConfig(PretrainedConfig):
             pass
 
 
-def _dependency_interval(module, low, high):
+def dependency_interval(module, low, high):
     """Inclusive input support of an output interval; no waveform blending."""
     if isinstance(module, (nn.Sequential, OobleckDecoder, DecoderBlock)):
         layers = module if isinstance(module, nn.Sequential) else module.layers
         for child in reversed(list(layers)):
-            low, high = _dependency_interval(child, low, high)
+            low, high = dependency_interval(child, low, high)
         return low, high
     else:
         pass
     if isinstance(module, ResidualUnit):
-        a, b = _dependency_interval(module.layers, low, high)
+        a, b = dependency_interval(module.layers, low, high)
         return min(a, low), max(b, high)
     else:
         pass
@@ -476,11 +476,11 @@ def _dependency_interval(module, low, high):
     raise TypeError(f"No audited support rule for {type(module).__name__}")
 
 
-def _output_length(module, length):
+def output_length(module, length):
     if isinstance(module, (nn.Sequential, OobleckDecoder, DecoderBlock)):
         layers = module if isinstance(module, nn.Sequential) else module.layers
         for child in layers:
-            length = _output_length(child, length)
+            length = output_length(child, length)
         return length
     else:
         pass
@@ -688,7 +688,7 @@ class YuE2VAE(PreTrainedModel):
     def decoder_device(self):
         return next(self.decoder.parameters()).device
 
-    def _latent(self, latent):
+    def validate_latent(self, latent):
         latent = torch.as_tensor(latent)
         if (
             latent.ndim != 3
@@ -756,7 +756,7 @@ class YuE2VAE(PreTrainedModel):
     @torch.inference_mode()
     def decode(self, latent):
         """Full waveform, FP32 [B,2,1920*T-64], without clipping."""
-        latent = self._latent(latent)
+        latent = self.validate_latent(latent)
         with torch.autocast(device_type=self.decoder_device.type, enabled=False):
             return self.decoder(
                 latent.to(device=self.decoder_device, dtype=torch.float32)
@@ -767,14 +767,14 @@ class YuE2VAE(PreTrainedModel):
             raise ValueError("frames must be positive")
         else:
             pass
-        return _output_length(self.decoder, int(frames))
+        return output_length(self.decoder, int(frames))
 
     def required_halo(self, core_frames=None):
         core_frames = (
             self.config.decode_core_frames if core_frames is None else core_frames
         )
         ratio = self.config.downsampling_ratio
-        low, high = _dependency_interval(self.decoder, 0, core_frames * ratio - 1)
+        low, high = dependency_interval(self.decoder, 0, core_frames * ratio - 1)
         return max(0, -low, high - core_frames + 1)
 
     @torch.inference_mode()
@@ -795,7 +795,7 @@ class YuE2VAE(PreTrainedModel):
         no extra synchronization is added. With a CUDA output device, queued
         work may still be executing. Callback exceptions propagate.
         """
-        latent = self._latent(latent)
+        latent = self.validate_latent(latent)
         core_frames = (
             self.config.decode_core_frames if core_frames is None else core_frames
         )

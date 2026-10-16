@@ -26,7 +26,7 @@ _VARLEN = None
 _LOADED = False
 
 
-def _load_varlen():
+def load_varlen():
     """Return SGLang's shared varlen attention, or None when disabled/missing."""
     global _VARLEN, _LOADED
     if not _LOADED:
@@ -52,7 +52,7 @@ def _load_varlen():
 
 def fa3_available() -> bool:
     """True when the shared (FA3) varlen attention path is active."""
-    return _load_varlen() is not None
+    return load_varlen() is not None
 
 
 def varlen_attention(q, k, v, cu_seqlens_q, cu_seqlens_k, max_q, max_k, seqused_k=None):
@@ -62,7 +62,7 @@ def varlen_attention(q, k, v, cu_seqlens_q, cu_seqlens_k, max_q, max_k, seqused_
     ``seqused_k`` (optional) caps each row's effective key length. Returns
     ``[sum(q_len), HQ, HD]``.
     """
-    varlen = _load_varlen()
+    varlen = load_varlen()
     if varlen is not None:
         return varlen(
             q,
@@ -78,7 +78,7 @@ def varlen_attention(q, k, v, cu_seqlens_q, cu_seqlens_k, max_q, max_k, seqused_
         )
     else:
         pass
-    return torch.ops.aten._flash_attention_forward(
+    return torch.ops.aten._flash_attention_forward(  # noqa: leading-underscore  # ATen op name
         q,
         k,
         v,
@@ -90,4 +90,6 @@ def varlen_attention(q, k, v, cu_seqlens_q, cu_seqlens_k, max_q, max_k, seqused_
         False,
         False,
         seqused_k=seqused_k,
-    )[0]
+    )[
+        0
+    ]

@@ -80,7 +80,7 @@ def distribution(logits, sampling, history, step, phase, legacy_off=False):
     return scores
 
 
-def _sample_next(
+def sample_next(
     sampler,
     logits,
     sampling,
@@ -122,7 +122,7 @@ def _sample_next(
     return torch.multinomial(probabilities, 1, generator=generator)
 
 
-def _decode_loop(
+def decode_loop(
     *,
     step_fn,
     logits_pair,
@@ -158,7 +158,7 @@ def _decode_loop(
             if cfg_scale == 1.0
             else unconditional + cfg_scale * (conditional - unconditional)
         )
-        next_id = _sample_next(
+        next_id = sample_next(
             sampler,
             logits,
             sampling,
@@ -290,7 +290,9 @@ def generate_tokens(
     graph_enabled = (
         use_cuda_graph
         and device.type == "cuda"
-        and not getattr(model, "_yue2_fp8_originals", {})
+        and not getattr(
+            model, "_yue2_fp8_originals", {}
+        )  # noqa: leading-underscore  # set by upstream YuE quantization.py
     )
     if graph_enabled:
         from .cuda_graph import default_session_pool
@@ -367,7 +369,7 @@ def generate_tokens(
             if sampler is not None
             else None
         )
-        history, timing, truncated, _fed = _decode_loop(
+        history, timing, truncated, _fed = decode_loop(
             step_fn=step_fn,
             logits_pair=logits_pair,
             sampling=sampling,
@@ -390,7 +392,9 @@ def generate_tokens(
         if use_cuda_graph and not graph_enabled:
             timing["graph_fallback_reason"] = (
                 "fp8_not_graph_validated"
-                if getattr(model, "_yue2_fp8_originals", {})
+                if getattr(
+                    model, "_yue2_fp8_originals", {}
+                )  # noqa: leading-underscore  # set by upstream YuE quantization.py
                 else "non_cuda_device"
             )
         else:

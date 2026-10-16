@@ -26,7 +26,7 @@ from .fa3 import varlen_attention
 # TODO (yiakwy) : switch to Ideogram-4 breakable CUDA graph (BCG) prompt padding.
 
 
-def _fused_enabled() -> bool:
+def fused_enabled() -> bool:
     return os.environ.get("SGLANG_YUE2_FUSED_DECODE", "1") == "1"
 
 
@@ -36,7 +36,7 @@ def model_fused_weights(model):
     The copies are only used by the fused decode path; the original modules
     keep serving prefill and the NAR branch.
     """
-    cached = getattr(model, "_yue2_fused_weights", None)
+    cached = getattr(model, "yue2_fused_weights", None)
     if cached is None:
         layers = []
         for layer in model.model.layers:
@@ -52,14 +52,14 @@ def model_fused_weights(model):
                 [layer.mlp.gate_proj.weight, layer.mlp.up_proj.weight], dim=0
             ).contiguous()
             layers.append((qkv, gate_up))
-        model._yue2_fused_weights = layers
+        model.yue2_fused_weights = layers
         cached = layers
     else:
         pass
     return cached
 
 
-class _PrefixCache:
+class PrefixCache:
     """A single branch view used only by the original eager HF prefill."""
 
     def __init__(self, keys, values, branch):
@@ -159,7 +159,9 @@ class GraphAR:
                 layer.mlp.down_proj,
             )
         ]
-        if getattr(model, "_yue2_fp8_originals", None) or any(
+        if getattr(
+            model, "_yue2_fp8_originals", None
+        ) or any(  # noqa: leading-underscore  # set by upstream YuE quantization.py
             not isinstance(module, torch.nn.Linear) or module.weight.dtype != self.dtype
             for module in linears
         ):
@@ -193,7 +195,9 @@ class GraphAR:
             and hasattr(torch.ops.aten, "_flash_attention_forward")
             and (
                 "seqused_k"
-                in str(torch.ops.aten._flash_attention_forward.default._schema)
+                in str(
+                    torch.ops.aten._flash_attention_forward.default._schema
+                )  # noqa: leading-underscore  # ATen op and overload schema names
             )
         )
         # Torch 2.10 is pinned by the package. Its native variable-length FA
@@ -293,7 +297,7 @@ class GraphAR:
         )
         self.use_fused_kernels = False
         if (
-            _fused_enabled()
+            fused_enabled()
             and self.device.type == "cuda"
             and self.dtype in {torch.bfloat16, torch.float16}
             and not fuse_projections
@@ -307,16 +311,16 @@ class GraphAR:
         else:
             pass
         self.positions_i32 = self.positions.to(torch.int32)
-        self._fused_layer_weights = (
+        self.fused_layer_weights = (
             model_fused_weights(model) if self.use_fused_kernels else None
         )
         self.sampler = sampler
         self.step_mode = sampler is not None
 
     @torch.inference_mode()
-    def _decode(self):
+    def decode(self):
         if self.use_fused_kernels:
-            return self._decode_fused()
+            return self.decode_fused()
         else:
             pass
         backbone = self.model.model
@@ -339,7 +343,7 @@ class GraphAR:
         ):
             normalized = layer.input_layernorm(x)
             if self.fused_weights:
-                from .modeling_yue2 import _apply_rotary
+                from .modeling_yue2 import apply_rotary
 
                 sizes = (
                     config.num_attention_heads * config.head_dim,
@@ -362,8 +366,8 @@ class GraphAR:
                 v = v.view(
                     self.branches, 1, config.num_key_value_heads, config.head_dim
                 )
-                q = _apply_rotary(q, cos.unsqueeze(2), sin.unsqueeze(2))
-                k = _apply_rotary(k, cos.unsqueeze(2), sin.unsqueeze(2))
+                q = apply_rotary(q, cos.unsqueeze(2), sin.unsqueeze(2))
+                k = apply_rotary(k, cos.unsqueeze(2), sin.unsqueeze(2))
             else:
                 q, k, v = layer.self_attn.project_qkv(normalized, cos, sin)
             keys.scatter_(1, slots, k)
@@ -419,7 +423,7 @@ class GraphAR:
         return output
 
     @torch.inference_mode()
-    def _decode_fused(self):
+    def decode_fused(self):
         """Decode with SGLang fused kernels: fused_add_rmsnorm, fused QKV +
         gate/up GEMMs, fused per-head q/k RMSNorm + NeoX RoPE, fused SiLU-mul.
 
@@ -454,7 +458,7 @@ class GraphAR:
         for index, (layer, keys, values) in enumerate(
             zip(backbone.layers, self.keys, self.values)
         ):
-            qkv_w, gate_up_w = self._fused_layer_weights[index]
+            qkv_w, gate_up_w = self.fused_layer_weights[index]
             qkv = F.linear(hidden.view(B, H), qkv_w)
             sgl_kernel.fused_qk_norm_rope(
                 qkv,
@@ -532,20 +536,20 @@ class GraphAR:
         return output
 
     @torch.inference_mode()
-    def _step_once(self):
+    def step_once(self):
         """Captured body for the fused decode+sample step graph.
 
         The sampled token feeds the next replay's decode entirely on the GPU;
         the sampler keeps its ring/step state in graph buffers.
         """
         self.tokens.copy_(self.sampler.token_buf.expand(self.branches, 1))
-        logits = self._decode()
+        logits = self.decode()
         token, done = self.sampler.sample_in_graph(logits)
         self.sampler.advance_in_graph()
         return token, done
 
     @torch.inference_mode()
-    def _capture(self):
+    def capture_graph(self):
         with torch.cuda.device(self.device):
             current = torch.cuda.current_stream(self.device)
             warmup = torch.cuda.Stream(device=self.device)
@@ -554,9 +558,9 @@ class GraphAR:
                 for _ in range(3):
                     self.positions.copy_(self.initial_positions)
                     if self.step_mode:
-                        self._step_once()
+                        self.step_once()
                     else:
-                        self._decode()
+                        self.decode()
                 self.positions.copy_(self.initial_positions)
                 if self.step_mode:
                     self.sampler.reset_state()
@@ -573,9 +577,9 @@ class GraphAR:
                 pass
             with torch.cuda.graph(self.graph):
                 if self.step_mode:
-                    self.output = self._step_once()
+                    self.output = self.step_once()
                 else:
-                    self.output = self._decode()
+                    self.output = self.decode()
             # Warmup/capture wrote one future slot. The first real step
             # overwrites that slot in every layer before making it visible.
             self.positions.copy_(self.initial_positions)
@@ -616,7 +620,7 @@ class GraphAR:
             self.tokens.copy_(
                 torch.tensor([[int(token)]], device=self.device, dtype=torch.long)
             )
-        result = self._decode()
+        result = self.decode()
         self.steps += 1
         return result
 
@@ -628,7 +632,7 @@ class GraphAR:
             pass
         logits = []
         for branch, prefix in enumerate(self.prefixes):
-            cache = _PrefixCache(self.keys, self.values, branch)
+            cache = PrefixCache(self.keys, self.values, branch)
             result = self.model(
                 torch.tensor([prefix], dtype=torch.long, device=self.device),
                 past_key_values=cache,
@@ -638,7 +642,7 @@ class GraphAR:
             logits.append(result.logits[:, -1])
         result = torch.cat(logits, dim=0)
         if self.capture and self.max_tokens > 1 and self.graph is None:
-            self._capture()
+            self.capture_graph()
         else:
             pass
         self.ready = True
@@ -689,7 +693,7 @@ class GraphAR:
             self.graph.replay()
             result = self.output
         else:
-            result = self._decode()
+            result = self.decode()
         self.steps += 1
         return result
 
@@ -698,7 +702,7 @@ class GraphAR:
         self.keys.clear()
         self.values.clear()
         self.fused_weights.clear()
-        self._fused_layer_weights = None
+        self.fused_layer_weights = None
         self.positions_i32 = None
         self.tokens = self.positions = self.initial_positions = self.key_positions = (
             None
@@ -764,9 +768,9 @@ class GraphSessionPool:
     def __init__(self, bucket: int = 256, max_sessions_per_key: int = 4):
         self.bucket = int(bucket)
         self.max_sessions_per_key = int(max_sessions_per_key)
-        self._idle: dict[tuple[int, int], list] = {}
-        self._live = 0
-        self._lock = threading.Lock()
+        self.idle: dict[tuple[int, int], list] = {}
+        self.live = 0
+        self.lock = threading.Lock()
 
     def capacity_for(self, prefixes, max_tokens) -> int:
         need = max(map(len, prefixes)) + int(max_tokens)
@@ -780,8 +784,8 @@ class GraphSessionPool:
         budget = capacity - max(map(len, prefixes))
         key = (len(prefixes), capacity)
         session = None
-        with self._lock:
-            idle = self._idle.get(key)
+        with self.lock:
+            idle = self.idle.get(key)
             if idle:
                 session = idle.pop()
             else:
@@ -792,8 +796,8 @@ class GraphSessionPool:
         else:
             pass
         session = GraphAR(model, prefixes, budget)
-        with self._lock:
-            self._live += 1
+        with self.lock:
+            self.live += 1
         return session
 
     def release(self, session):
@@ -802,8 +806,8 @@ class GraphSessionPool:
         else:
             pass
         key = (session.branches, session.capacity)
-        with self._lock:
-            idle = self._idle.setdefault(key, [])
+        with self.lock:
+            idle = self.idle.setdefault(key, [])
             if len(idle) < self.max_sessions_per_key:
                 idle.append(session)
                 return
@@ -812,10 +816,10 @@ class GraphSessionPool:
         session.close()
 
     def stats(self) -> dict:
-        with self._lock:
+        with self.lock:
             return {
-                "live_sessions": self._live,
-                "idle": {str(k): len(v) for k, v in self._idle.items()},
+                "live_sessions": self.live,
+                "idle": {str(k): len(v) for k, v in self.idle.items()},
             }
 
 
