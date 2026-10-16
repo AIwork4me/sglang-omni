@@ -41,7 +41,9 @@ def build_generation_config(state) -> GenerationConfig:
     semantic_max = int(state.semantic_max_tokens)
     return GenerationConfig(
         abc=Sampling(0.7, 0.9, 30, 1.005, 100, min(32, abc_max), abc_max),
-        semantic=Sampling(1.0, 0.95, 100, 1.2, 50, min(200, semantic_max), semantic_max),
+        semantic=Sampling(
+            1.0, 0.95, 100, 1.2, 50, min(200, semantic_max), semantic_max
+        ),
         ode_steps=int(state.ode_steps),
     )
 
@@ -106,8 +108,11 @@ class Yue2Synthesizer:
         buckets: dict[tuple, list[int]] = {}
         for index, latents in enumerate(latents_list):
             state = states[index]
-            key = (int(latents.shape[0]), int(state.vae_core_frames),
-                   int(state.vae_halo_frames))
+            key = (
+                int(latents.shape[0]),
+                int(state.vae_core_frames),
+                int(state.vae_halo_frames),
+            )
             buckets.setdefault(key, []).append(index)
 
         audio: list[torch.Tensor] = [None] * len(latents_list)
@@ -116,7 +121,8 @@ class Yue2Synthesizer:
                 [latents_list[i].unsqueeze(0).transpose(1, 2) for i in indices], dim=0
             ).to(device=runtime.device, dtype=torch.float32)
             decoded = runtime.vae.decode_tiled(
-                stacked, core_frames=core, halo_frames=halo, output_device="cpu")
+                stacked, core_frames=core, halo_frames=halo, output_device="cpu"
+            )
             for row, index in enumerate(indices):
                 audio[index] = decoded[row]
         return audio
@@ -127,29 +133,55 @@ class Yue2Synthesizer:
         request = self.requests_for_states([state])[0]
         config = build_generation_config(state)
         prefix = token_prefixes(request, runtime.tokenizer)
-        negative = negative_prefix(request, runtime.tokenizer) if float(state.cfg_scale) != 1.0 else None
+        negative = (
+            negative_prefix(request, runtime.tokenizer)
+            if float(state.cfg_scale) != 1.0
+            else None
+        )
         prefixes = [prefix, negative] if negative is not None else [prefix]
 
         started = time.perf_counter()
         session = default_session_pool.acquire(
-            runtime.model, prefixes, song_token_budget(config.abc, config.semantic))
+            runtime.model, prefixes, song_token_budget(config.abc, config.semantic)
+        )
         try:
             abc_ids, semantic_ids, _timing, fed_codec = generate_song_tokens(
-                runtime.model, session, runtime.tokenizer, request,
-                abc_sampling=config.abc, semantic_sampling=config.semantic,
-                cfg_scale=float(state.cfg_scale), negative_prefix_ids=negative)
-            semantic_prefix = token_prefixes(request, runtime.tokenizer, abc_ids=abc_ids)
+                runtime.model,
+                session,
+                runtime.tokenizer,
+                request,
+                abc_sampling=config.abc,
+                semantic_sampling=config.semantic,
+                cfg_scale=float(state.cfg_scale),
+                negative_prefix_ids=negative,
+            )
+            semantic_prefix = token_prefixes(
+                request, runtime.tokenizer, abc_ids=abc_ids
+            )
             codec = [int(token) - CODEC_OFFSET for token in semantic_ids]
             try:
                 latents = synthesize_from_session(
-                    runtime.model, session, prefix_len=len(semantic_prefix),
-                    codec=codec, seed=request.seed, fed_codec=int(fed_codec),
-                    steps=config.ode_steps, context=CONTEXT)
+                    runtime.model,
+                    session,
+                    prefix_len=len(semantic_prefix),
+                    codec=codec,
+                    seed=request.seed,
+                    fed_codec=int(fed_codec),
+                    steps=config.ode_steps,
+                    context=CONTEXT,
+                )
             except ValueError:
                 latents = nar_synthesize(
-                    runtime.model, prefix=semantic_prefix, codec=codec,
-                    seed=request.seed, steps=config.ode_steps, context=CONTEXT,
-                    attention="sdpa", offload_ar=False, query_chunk_size=None)
+                    runtime.model,
+                    prefix=semantic_prefix,
+                    codec=codec,
+                    seed=request.seed,
+                    steps=config.ode_steps,
+                    context=CONTEXT,
+                    attention="sdpa",
+                    offload_ar=False,
+                    query_chunk_size=None,
+                )
         finally:
             default_session_pool.release(session)
 
@@ -168,14 +200,20 @@ class Yue2Synthesizer:
         configs = [build_generation_config(state) for state in states]
         requests = self.requests_for_states(states)
         items = [
-            BatchItem(extra={"yue2_request": request,
-                             "yue2_prefix": list(token_prefixes(request, runtime.tokenizer))})
+            BatchItem(
+                extra={
+                    "yue2_request": request,
+                    "yue2_prefix": list(token_prefixes(request, runtime.tokenizer)),
+                }
+            )
             for request in requests
         ]
 
         started = time.perf_counter()
         try:
-            run_batched_ar(runtime.model, runtime.tokenizer, items, lambda _sp: configs[0])
+            run_batched_ar(
+                runtime.model, runtime.tokenizer, items, lambda _sp: configs[0]
+            )
         except Exception:
             return [self.synthesize(state) for state in states]
 
@@ -189,8 +227,14 @@ class Yue2Synthesizer:
         seeds = [request.seed for request in requests]
         try:
             latents_list = synthesize_batched(
-                runtime.model, session, branches, prefix_lens, codecs, seeds,
-                configs[0].ode_steps)
+                runtime.model,
+                session,
+                branches,
+                prefix_lens,
+                codecs,
+                seeds,
+                configs[0].ode_steps,
+            )
         finally:
             lease = items[0].extra.get("yue2_session_lease")
             if lease is not None:

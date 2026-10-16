@@ -15,7 +15,7 @@ from dataclasses import dataclass
 import torch
 
 from .modeling_vae import YuE2VAE
-from .nar import Chunk, CachedNAR
+from .nar import CachedNAR, Chunk
 from .protocol import CODEC_OFFSET, CONTEXT, MUSIC_END
 
 

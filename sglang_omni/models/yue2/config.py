@@ -7,11 +7,7 @@ from typing import ClassVar
 
 from pydantic import Field
 
-from sglang_omni.config import (
-    PipelineConfig,
-    PlacementConfig,
-    StageConfig,
-)
+from sglang_omni.config import PipelineConfig, PlacementConfig, StageConfig
 
 _PKG = "sglang_omni.models.yue2"
 
