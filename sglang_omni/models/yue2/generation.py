@@ -62,7 +62,10 @@ def generate_codec_tokens(
         prefix = token_prefixes(request, runtime.tokenizer, abc_ids=abc_ids)
 
         semantic_sampling = config.semantic
-        semantic_kwargs = {**semantic_sampling.__dict__, "max_tokens": int(semantic_max_tokens)}
+        semantic_kwargs = {
+            **semantic_sampling.__dict__,
+            "max_tokens": int(semantic_max_tokens),
+        }
         if semantic_kwargs["min_tokens"] > semantic_kwargs["max_tokens"]:
             semantic_kwargs["min_tokens"] = semantic_kwargs["max_tokens"]
         else:

@@ -7,6 +7,7 @@ import logging
 import os
 
 import torch
+
 from sglang_omni.platforms import current_platform
 from sglang_omni.proto import StagePayload
 from sglang_omni.scheduling.pipeline_state import load_state, store_state
@@ -57,8 +58,9 @@ def create_synth_executor(
     # note (rocm): serve one request at a time until the batched AR/NAR path
     # is validated on ROCm; NVIDIA keeps the configured default.
     default_max_batch_size = "1" if current_platform.is_rocm() else "4"
-    max_batch_size = int(os.environ.get("SGLANG_YUE2_BATCH_MAX_SIZE",
-                                        default_max_batch_size))
+    max_batch_size = int(
+        os.environ.get("SGLANG_YUE2_BATCH_MAX_SIZE", default_max_batch_size)
+    )
     max_batch_wait_ms = int(os.environ.get("SGLANG_YUE2_BATCH_WAIT_MS", "25"))
 
     def _output(payload, state, waveform, seconds, batch):
@@ -79,7 +81,8 @@ def create_synth_executor(
             f"elapsed={seconds:.2f}s batch={batch}"
         )
         return StagePayload(
-            request_id=payload.request_id, request=payload.request, data=data)
+            request_id=payload.request_id, request=payload.request, data=data
+        )
 
     def _synth_one(payload: StagePayload) -> StagePayload:
         state = load_state(payload, Yue2State)

@@ -13,8 +13,8 @@ from .constants import (
     DEFAULT_ABC_MAX_TOKENS,
     DEFAULT_COT,
     DEFAULT_ODE_STEPS,
-    DEFAULT_SEMANTIC_MAX_TOKENS,
     DEFAULT_SEED,
+    DEFAULT_SEMANTIC_MAX_TOKENS,
     DEFAULT_STYLE,
     DEFAULT_VAE_CORE_FRAMES,
     DEFAULT_VAE_HALO_FRAMES,
@@ -147,27 +147,35 @@ def build_yue2_state(payload: StagePayload) -> Yue2State:
         cfg_scale = float(obj.get("cfg_scale") or 1.0)
         abc_max_tokens = as_int(obj.get("abc_max_tokens"), DEFAULT_ABC_MAX_TOKENS)
         semantic_max_tokens = as_int(
-            obj.get("semantic_max_tokens"), DEFAULT_SEMANTIC_MAX_TOKENS)
+            obj.get("semantic_max_tokens"), DEFAULT_SEMANTIC_MAX_TOKENS
+        )
         ode_steps = as_int(obj.get("ode_steps"), DEFAULT_ODE_STEPS)
         vae_core_frames = as_int(obj.get("vae_core_frames"), DEFAULT_VAE_CORE_FRAMES)
         vae_halo_frames = as_int(
-            obj.get("vae_halo_frames"), DEFAULT_VAE_HALO_FRAMES, minimum=0)
+            obj.get("vae_halo_frames"), DEFAULT_VAE_HALO_FRAMES, minimum=0
+        )
     else:
-        style = as_string(tts_params.get("instructions"), DEFAULT_STYLE) or DEFAULT_STYLE
+        style = (
+            as_string(tts_params.get("instructions"), DEFAULT_STYLE) or DEFAULT_STYLE
+        )
         lyrics = as_string(request.inputs, "")
         cot = as_string(tts_params.get("cot"), DEFAULT_COT)
         seed = as_seed(tts_params.get("seed"))
         abc = as_string(tts_params.get("abc"), "") or None
         cfg_scale = float(tts_params.get("cfg_scale") or 1.0)
         abc_max_tokens = as_int(
-            tts_params.get("abc_max_tokens"), DEFAULT_ABC_MAX_TOKENS)
+            tts_params.get("abc_max_tokens"), DEFAULT_ABC_MAX_TOKENS
+        )
         semantic_max_tokens = as_int(
-            params.get("max_new_tokens"), DEFAULT_SEMANTIC_MAX_TOKENS)
+            params.get("max_new_tokens"), DEFAULT_SEMANTIC_MAX_TOKENS
+        )
         ode_steps = as_int(tts_params.get("ode_steps"), DEFAULT_ODE_STEPS)
         vae_core_frames = as_int(
-            tts_params.get("vae_core_frames"), DEFAULT_VAE_CORE_FRAMES)
+            tts_params.get("vae_core_frames"), DEFAULT_VAE_CORE_FRAMES
+        )
         vae_halo_frames = as_int(
-            tts_params.get("vae_halo_frames"), DEFAULT_VAE_HALO_FRAMES, minimum=0)
+            tts_params.get("vae_halo_frames"), DEFAULT_VAE_HALO_FRAMES, minimum=0
+        )
 
     return Yue2State(
         style=style,

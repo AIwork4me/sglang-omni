@@ -62,8 +62,10 @@ def main() -> None:
     elapsed = time.perf_counter() - started
     sf.write(args.out, waveform.cpu().numpy().T, 48000)
     duration = waveform.shape[-1] / 48000
-    print(f"wrote {args.out}: duration={duration:.1f}s latency={elapsed:.2f}s "
-          f"rtf={elapsed / max(duration, 1e-6):.3f}")
+    print(
+        f"wrote {args.out}: duration={duration:.1f}s latency={elapsed:.2f}s "
+        f"rtf={elapsed / max(duration, 1e-6):.3f}"
+    )
 
 
 if __name__ == "__main__":
