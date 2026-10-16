@@ -49,6 +49,17 @@ def test_yue2_limit_accepts_prompt164_payload() -> None:
     assert len(request.input) == 4114
 
 
+def test_yue2_limit_accepts_synthetic_long_input() -> None:
+    service = SpeechRequestValidator(
+        default_model="yue2",
+        max_speech_input_chars=Yue2PipelineConfig.max_speech_input_chars,
+    )
+
+    request = service.parse_request({"input": "la " * 4096})
+
+    assert len(request.input) == 12288
+
+
 def test_yue2_limit_is_none_like_moss_tts() -> None:
     assert Yue2PipelineConfig.max_speech_input_chars is None
     assert MossTTSPipelineConfig.max_speech_input_chars is None
