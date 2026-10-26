@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import base64
 import io
 import pickle
 from dataclasses import fields, is_dataclass
@@ -182,7 +181,7 @@ def strip_process_local_metadata(
 ) -> dict[str, object] | None:
     """Drop values that only mean something inside the sending process.
 
-    A CUDA event orders a same-process consumer after the producer's stream;
+    A device event orders a same-process consumer after the producer's stream;
     across a process boundary the transport establishes readiness itself.
     """
     if metadata is None:
@@ -192,7 +191,7 @@ def strip_process_local_metadata(
     return {
         key: value
         for key, value in metadata.items()
-        if not isinstance(value, torch.cuda.Event)
+        if not isinstance(value, torch.Event)
     }
 
 
@@ -536,7 +535,7 @@ async def write_payload(
             transport=transport,
             relay_info=op.metadata,
         ),
-        header=base64.b64encode(pickle.dumps(header)).decode("ascii"),
+        header=pickle.dumps(header),
         tensors=tuple(entries),
     )
     return data_ref, op
@@ -556,7 +555,7 @@ async def read_payload(
         raise ValueError("stage_payload data_ref is missing header")
     else:
         pass
-    header = pickle.loads(base64.b64decode(data_ref.header))
+    header = pickle.loads(data_ref.header)
     transfer_buf = await read_transfer_buffer(relay, request_id, data_ref)
     tensors = {
         entry.path: restore_tensor_device(
