@@ -20,6 +20,8 @@ import os
 
 import torch
 
+from sglang_omni.platforms import current_platform
+
 from .protocol import ABC_END, CODEC_OFFSET, CODEC_SIZE, EOD, MUSIC_END
 
 _IN_TREE = None
@@ -67,6 +69,14 @@ def _load_topk_backend():
 
 def fast_sampler_available() -> bool:
     if os.environ.get("SGLANG_YUE2_FAST_SAMPLER", "1") != "1":
+        return False
+    else:
+        pass
+    if current_platform.is_rocm():
+        # note (rocm): add fast TopK support. torch.cuda.is_available() is
+        # also true on HIP, but the DeepSelect JIT is CUDA-only today; the
+        # reference sampler is the validated path. A ROCm-buildable top-k
+        # (e.g. flash-float-jit-kernels) re-enables this once runnable.
         return False
     else:
         pass

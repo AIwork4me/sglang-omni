@@ -43,8 +43,8 @@ def create_synth_executor(
     gpu_id: int | None = None,
     device: str | None = None,
 ) -> SimpleScheduler[StagePayload, StagePayload]:
-    if not current_platform.is_cuda():
-        raise RuntimeError("YuE2 requires a CUDA backend")
+    if not (current_platform.is_cuda() or current_platform.is_rocm()):
+        raise RuntimeError("YuE2 requires a CUDA or ROCm backend")
     else:
         pass
     torch.backends.cudnn.enabled = False
@@ -54,7 +54,11 @@ def create_synth_executor(
 
     device = str(resolve_concrete_device(device, gpu_id))
     synthesizer = Yue2Synthesizer(model_path, device=device)
-    max_batch_size = int(os.environ.get("SGLANG_YUE2_BATCH_MAX_SIZE", "4"))
+    # note (rocm): serve one request at a time until the batched AR/NAR path
+    # is validated on ROCm; NVIDIA keeps the configured default.
+    default_max_batch_size = "1" if current_platform.is_rocm() else "4"
+    max_batch_size = int(os.environ.get("SGLANG_YUE2_BATCH_MAX_SIZE",
+                                        default_max_batch_size))
     max_batch_wait_ms = int(os.environ.get("SGLANG_YUE2_BATCH_WAIT_MS", "25"))
 
     def _output(payload, state, waveform, seconds, batch):
